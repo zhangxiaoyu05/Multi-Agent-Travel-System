@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    container_name: travel-agent
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app          # 代码挂载，修改即时生效
+    env_file:
+      - .env
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload

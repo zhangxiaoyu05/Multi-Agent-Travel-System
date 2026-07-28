@@ -1,0 +1,73 @@
+# =============================================================================
+# 入境定制游多 Agent 系统——Git 忽略规则
+# =============================================================================
+
+# ---- Python 编译产物 ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.spec
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 环境变量（含密钥，严禁提交） ----
+.env
+.env.local
+.env.production
+
+# ---- IDE 与编辑器 ----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ---- 操作系统 ----
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---- 日志 ----
+*.log
+logs/
+*.log.*
+
+# ---- 数据库与持久化 ----
+*.db
+*.sqlite
+*.sqlite3
+checkpoint_data/
+
+# ---- 测试覆盖率 ----
+.coverage
+htmlcov/
+.coverage.*
+pytest_cache/
+.tox/
+
+# ---- Docker ----
+# （.env 已在上面排除，不重复）
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- 临时文件 ----
+tmp/
+temp/
+*.tmp
+*.bak
+*.cache
