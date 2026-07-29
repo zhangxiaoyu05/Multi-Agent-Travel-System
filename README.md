@@ -48,11 +48,17 @@ Multi_Agent/
 │   ├── nodes/             # 节点实现（薄层，调用 Agent）
 │   └── conditions/        # 条件边（路由判断）
 ├── agents/                # Agent 业务实现
-│   ├── customer_service.py
-│   └── trip_planner.py
+│   ├── base.py            #   BaseAgent 抽象基类
+│   ├── customer_service.py #   客服 Agent（FAQ + 转人工）
+│   └── trip_planner.py    #   定制 Agent（需求提取 + 草案生成 + 修订）
 ├── tools/                 # LangChain Tools（MVP 全 Mock）
+│   ├── mock_faq.py        #   FAQ 知识库（签证/支付/退改等 10 类）
+│   ├── mock_handoff.py    #   转人工评估
+│   ├── mock_weather.py    #   天气查询（12 城市）
+│   ├── mock_calendar.py   #   节假日 / 人流量
+│   └── mock_inventory.py  #   酒店 / 门票 / 车辆库存
 ├── services/              # 基础设施（LLM 网关）
-├── prompts/               # System Prompt 模板
+├── prompts/               # System Prompt 模板（3 个）
 ├── tests/                 # 测试
 ├── docker-compose.yml     # 本地开发编排
 ├── Dockerfile
@@ -147,10 +153,10 @@ docker-compose up --build
 | Phase | 内容 | 状态 |
 |-------|------|:---:|
 | Phase 0 | 项目骨架 + Docker 环境 | ✅ |
-| Phase 1 | State 定义 + 最简图 | 待开始 |
-| Phase 2 | 意图路由器完善 | 待开始 |
-| Phase 3 | 客服 Agent + 人工接管 | 待开始 |
-| Phase 4 | 定制 Agent + 修订循环 | 待开始 |
+| Phase 1 | State 定义 + 最简图 | ✅ |
+| Phase 2 | 意图路由器完善 | ✅ |
+| Phase 3 | 客服 Agent + 人工接管 | ✅ |
+| Phase 4 | 定制 Agent + 修订循环 | ✅ |
 | Phase 5 | 终态写入 + /chat 联调 | 待开始 |
 | Phase 6 | 销售 Agent + 运营 Agent | 后续 |
 | Phase 7 | RAG 增强（真实向量检索） | 后续 |
