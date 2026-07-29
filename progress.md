@@ -244,32 +244,46 @@ Phase 1  ██████████  ✅ State 定义 + 最简图           
 Phase 2  ██████████  ✅ 意图路由器完善                  2026-07-29 完成
 Phase 3  ██████████  ✅ 客服 Agent + 人工接管             2026-07-29 完成
 Phase 4  ██████████  ✅ 定制 Agent + 修订循环             2026-07-29 完成
-Phase 5  ░░░░░░░░░░  终态写入 + /chat API 联调         待开始
+Phase 5  ██████████  ✅ 终态写入 + /chat API 联调         2026-07-29 完成
 ────────── MVP 完成线 ─────────────────────────────────────
 Phase 6  ░░░░░░░░░░  销售 Agent + 运营 Agent           后续
 Phase 7  ░░░░░░░░░░  RAG 增强（真实向量检索）           后续
 Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
 ```
 
-### 下一步：Phase 5
+### 下一步：Phase 5 ✅ 已完成
 
-**目标**：终态写入（operations_sync 节点，写 CRM + 发 CAPI 事件）+ `/chat` API 联调，打通完整前后端链路。
+**完成时间**：2026-07-29
 
-**将创建的文件**：
+### 创建/更新的文件
 
 ```
-graph/state.py                # AgentState 定义
-graph/builder.py              # build_graph() 图构建
-graph/nodes/input_guard.py    # 入参保护
-graph/nodes/session_context.py # 会话初始化
-graph/nodes/intent_router.py  # 意图路由（骨架版）
-graph/conditions/route_decision.py  # 路由分发条件
-services/llm.py               # LLM 工厂（百炼）
-prompts/__init__.py           # Prompt 加载工具
-prompts/intent_router.txt     # 路由 Prompt 模板
+tools/
+├── mock_crm.py                            ← 新增：Mock CRM 客户记录写入
+├── mock_capi.py                           ← 新增：Mock CAPI 转化事件发送
+graph/nodes/
+└── operations_sync.py                     ← 新增：终态数据写入节点
+graph/builder.py                           ← 更新：添加 operations_sync 节点和边
+graph/conditions/revision_decision.py      ← 更新：accept→operations_sync 路由
+api/main.py                                ← 更新：实现 /chat API 端点
+main.py                                    ← 更新：8 组测试（含终态验证）
 ```
 
-**验证方式**：`python main.py test` → 输出意图分数和路由结果。
+### 关键实现
+
+- **Mock CRM**：模拟客户记录写入，接收 customer_id + session_data，返回写入成功状态
+- **Mock CAPI**：模拟转化事件发送（session_completed / trip_confirmed / handoff），Phase 8 对接 Meta/Google/TikTok CAPI
+- **operations_sync 节点**：所有终态路径（行程确认 accept、转人工 handoff）必经节点，自动执行 CRM + CAPI 写入后透传 final_reply
+- **图结构调整**：human_handoff → operations_sync → END；revision_decision(accept) → operations_sync；其他路径保持不变
+- **`/chat` API 端点**：完整实现 POST /chat，接收 ChatRequest → 调用 graph.ainvoke() → 转换为 ChatResponse（含 draft/quote/intent_scores）
+- **会话隔离**：通过 session_id ↔ thread_id 映射，同一会话多轮消息自动保持上下文
+
+### 验证结果
+
+- `python main.py test` → 8 组测试用例全部通过
+- 测试 1-6：Phase 3-4 回归正常
+- 测试 7：行程确认 → operations_sync 正常执行（CRM + CAPI）
+- 测试 8：转人工 → human_handoff → operations_sync 链路完整
 
 ---
 
@@ -289,3 +303,4 @@ prompts/intent_router.txt     # 路由 Prompt 模板
 | 2026-07-29 | 更新 main.py 添加 test 模式，4 组测试用例 | ✅ |
 | 2026-07-29 | Phase 3：客服 Agent（LLM+Tools）+ 人工接管（交接单）+ after_service 条件边 | ✅ |
 | 2026-07-29 | Phase 4：定制 Agent（需求提取+草案生成）+ 修订循环 + 意向评分 | ✅ |
+| 2026-07-29 | Phase 5：终态写入（operations_sync + CRM/CAPI）+ /chat API 联调，MVP 完成 | ✅ |

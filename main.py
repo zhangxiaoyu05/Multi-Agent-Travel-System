@@ -27,7 +27,7 @@ def safe_print(*args, **kwargs):
 
 
 def test_graph():
-    """命令行快速测试 LangGraph 图——Phase 4
+    """命令行快速测试 LangGraph 图——Phase 5
 
     发送多条测试消息，验证：
     - 意图路由 + 客服 FAQ + 投诉转人工（Phase 3 回归）
@@ -35,11 +35,12 @@ def test_graph():
     - 完整信息 → 工具调用 + 行程草案生成
     - 意向评分 + 修订循环
     - checkpoint 持久化（多轮需求收集）
+    - 终态写入（operations_sync 节点）
     """
     from graph.builder import build_graph
 
     safe_print("=" * 60)
-    safe_print("LangGraph Graph Test —— Phase 4")
+    safe_print("LangGraph Graph Test —— Phase 5")
     safe_print("=" * 60)
 
     graph = build_graph()
@@ -176,8 +177,49 @@ def test_graph():
     safe_print(f"  need_human     : {result6.get('need_human')}")
     safe_print(f"  Reply (trunc)  : {result6.get('final_reply', '')[:150]}")
 
+    # ---- 测试 7：终态写入——行程确认走 operations_sync ----
+    safe_print("\n>>> Test 7: Operations Sync — Trip Confirmed")
+    safe_print("-" * 40)
+
+    result7 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "帮我规划北京3天，8月10号到，1个人，预算3000人民币"}],
+            "session_id": "test-p5-07",
+            "customer_id": "cust-p5-07",
+            "channel": "web",
+            "language": "zh",
+        },
+        config={"configurable": {"thread_id": "test-p5-07"}},
+    )
+
+    safe_print(f"  Branch         : {result7.get('current_branch')}")
+    safe_print(f"  Draft version  : {result7.get('draft', {}).get('version', 'N/A')}")
+    safe_print(f"  Intent level   : {result7.get('intent_level')}")
+    safe_print(f"  Next action    : {result7.get('next_action')}")
+    safe_print(f"  Final reply OK : {'Yes' if result7.get('final_reply') else 'No'}")
+    safe_print(f"  [Phase 5] operations_sync should have run (CRM + CAPI written)")
+
+    # ---- 测试 8：终态写入——转人工走 operations_sync ----
+    safe_print("\n>>> Test 8: Operations Sync — Handoff → CRM")
+    safe_print("-" * 40)
+
+    result8 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "我要投诉！你们的服务太差了，我要退款！"}],
+            "session_id": "test-p5-08",
+            "customer_id": "cust-p5-08",
+            "channel": "web",
+            "language": "zh",
+        },
+        config={"configurable": {"thread_id": "test-p5-08"}},
+    )
+
+    safe_print(f"  need_human     : {result8.get('need_human')}")
+    safe_print(f"  Reply length   : {len(result8.get('final_reply', ''))} chars")
+    safe_print(f"  [Phase 5] handoff should have gone through operations_sync")
+
     safe_print("\n" + "=" * 60)
-    safe_print("[OK] All 6 tests completed!")
+    safe_print("[OK] All 8 tests completed!")
     safe_print("=" * 60)
 
 

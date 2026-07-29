@@ -1,8 +1,8 @@
-"""LangGraph 图构建——Phase 4
+"""LangGraph 图构建——Phase 5
 
 组装所有节点和边，编译为可执行的 StateGraph。
 
-完整图结构（Phase 4）：
+完整图结构（Phase 5）：
     START → input_guard → session_context → intent_router
                                                    │
          ┌─────────────────────────────────────────┼──────────────────────────┐
@@ -10,19 +10,22 @@
   customer_service                          trip_planner               human_handoff
          │                                  │        ▲                       │
          ├─ after_service                  ├─ requirements_complete         │
-         │                                 │        │                       │
-         ├─→ human_handoff ────────────────┤   ┌────┴────────┐              │
-         ├─→ intent_router                 │   ▼             ▼              │
-         └─→ END                           │ intent_scorer  END            │
-                                           │   │                            │
-                                           │   ├─ revision_decision         │
-                                           │   │   ├─ end → END            │
-                                           │   │   ├─ revision_loop ───────┘│
-                                           │   │   └─ human_handoff ────────┤
-                                           │   │                            ▼
-                                           │   └──────────────────────────→ END
-                                           │
-                                           └──→ END (缺信息等待下一轮)
+         │  ├─→ human_handoff ─────────────┤   │                            │
+         │  ├─→ intent_router              │   ├─→ intent_scorer            │
+         │  └─→ END                        │   └─→ END                     │
+         │                                 │                                │
+         │                                 └─→ intent_scorer               │
+         │                                     │                            │
+         │                                     ├─ revision_decision         │
+         │                                     │  ├─→ operations_sync ───┐  │
+         │                                     │  ├─→ revision_loop ────┘  │
+         │                                     │  └─→ human_handoff ──┐    │
+         │                                     │                       │    │
+         └─────────────────────────────────────┼───────────────────────┼────│
+                                               │                       │    │
+                                               └───────────────────────┼────│
+                                                                       ▼    ▼
+                                                                 operations_sync → END
 """
 
 from langgraph.graph import StateGraph, START, END
@@ -39,6 +42,7 @@ from graph.nodes.trip_planner import trip_planner
 from graph.nodes.intent_scorer import intent_scorer
 from graph.nodes.revision_loop import revision_loop
 from graph.nodes.human_handoff import human_handoff
+from graph.nodes.operations_sync import operations_sync
 
 # Conditions
 from graph.conditions.route_decision import route_decision
@@ -69,11 +73,16 @@ def build_graph():
         │                                      └─→ intent_scorer               │
         │                                          │                            │
         │                                          ├─ revision_decision         │
-        │                                          │  ├─→ END                   │
-        │                                          │  ├─→ revision_loop ────────┤
-        │                                          │  └─→ human_handoff         │
-        │                                          │                            ▼
-        └──────────────────────────────────────────┼──────────────────────→ END
+        │                                          │  ├─→ operations_sync ──┐   │
+        │                                          │  ├─→ revision_loop ───┘   │
+        │                                          │  └─→ human_handoff ──┐   │
+        │                                          │                       │   │
+        └──────────────────────────────────────────┼───────────────────────┼───│
+                                                   └───────────────────────┼───│
+                                                                           ▼   ▼
+                                                                     operations_sync
+                                                                           │
+                                                                          END
 
     Returns:
         编译后的 StateGraph（含 MemorySaver checkpoint）
@@ -93,6 +102,9 @@ def build_graph():
     builder.add_node("trip_planner", trip_planner)
     builder.add_node("intent_scorer", intent_scorer)
     builder.add_node("revision_loop", revision_loop)
+
+    # Phase 5 节点：终态数据写入
+    builder.add_node("operations_sync", operations_sync)
 
     # ====== 边 ======
 
@@ -138,7 +150,7 @@ def build_graph():
         "intent_scorer",
         revision_decision,
         {
-            "end": END,
+            "operations_sync": "operations_sync",
             "revision_loop": "revision_loop",
             "human_handoff": "human_handoff",
         }
@@ -147,8 +159,9 @@ def build_graph():
     # 修订循环回到定制
     builder.add_edge("revision_loop", "trip_planner")
 
-    # 人工接管 → END
-    builder.add_edge("human_handoff", END)
+    # 人工接管 → 终态写入 → END
+    builder.add_edge("human_handoff", "operations_sync")
+    builder.add_edge("operations_sync", END)
 
     # ====== 编译 ======
 

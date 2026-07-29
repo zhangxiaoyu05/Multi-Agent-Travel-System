@@ -9,19 +9,19 @@
 ```
 用户消息 → input_guard → session_context → intent_router
                                                 │
-                ┌───────────────────────────────┼───────────────────────┐
-                ▼                               ▼                       ▼
-        customer_service                  trip_planner            (sales/ops)
-         FAQ 答疑 / 转人工              需求采集 / 草案生成        Phase 6 补齐
-                │                               │
-                ▼                               ▼
-           human_handoff              intent_scorer → revision_loop
-           (人工接管兜底)                 (意向评分)     (修订循环)
-                │                               │
-                └───────────────┬───────────────┘
-                                ▼
-                        operations_sync
-                        (终态数据写入)
+                ┌───────────────────────────────┼──────────────────────────┐
+                ▼                               ▼                          ▼
+        customer_service                  trip_planner               human_handoff
+         FAQ 答疑 / 转人工              需求采集 / 草案生成           (人工接管)
+                │                               │                          │
+                ▼                               ▼                          │
+           human_handoff              intent_scorer → revision_loop        │
+                │                      (意向评分)     (修订循环)            │
+                │                               │                          │
+                └───────────────────────────────┼──────────────────────────┘
+                                                ▼
+                                        operations_sync
+                                     (终态：CRM + CAPI)
 ```
 
 ## 技术栈
@@ -46,6 +46,7 @@ Multi_Agent/
 │   ├── state.py           # 全局共享 AgentState
 │   ├── builder.py         # 图构建与编译
 │   ├── nodes/             # 节点实现（薄层，调用 Agent）
+│   │   └── operations_sync.py  # 终态数据写入（CRM + CAPI）
 │   └── conditions/        # 条件边（路由判断）
 ├── agents/                # Agent 业务实现
 │   ├── base.py            #   BaseAgent 抽象基类
@@ -57,6 +58,8 @@ Multi_Agent/
 │   ├── mock_weather.py    #   天气查询（12 城市）
 │   ├── mock_calendar.py   #   节假日 / 人流量
 │   └── mock_inventory.py  #   酒店 / 门票 / 车辆库存
+│   ├── mock_crm.py        #   CRM 客户记录写入
+│   └── mock_capi.py       #   CAPI 转化事件发送
 ├── services/              # 基础设施（LLM 网关）
 ├── prompts/               # System Prompt 模板（3 个）
 ├── tests/                 # 测试
@@ -157,7 +160,7 @@ docker-compose up --build
 | Phase 2 | 意图路由器完善 | ✅ |
 | Phase 3 | 客服 Agent + 人工接管 | ✅ |
 | Phase 4 | 定制 Agent + 修订循环 | ✅ |
-| Phase 5 | 终态写入 + /chat 联调 | 待开始 |
+| Phase 5 | 终态写入 + /chat 联调 | ✅ |
 | Phase 6 | 销售 Agent + 运营 Agent | 后续 |
 | Phase 7 | RAG 增强（真实向量检索） | 后续 |
 | Phase 8 | 生产化 | 后续 |

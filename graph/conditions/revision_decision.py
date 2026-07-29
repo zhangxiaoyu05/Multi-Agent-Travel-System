@@ -29,13 +29,13 @@ def revision_decision(state: AgentState) -> str:
     action = state.get("next_action", "accept")
     count = state.get("revision_count", 0)
 
-    # 高意向或明确接受 → 正常结束
+    # 高意向或明确接受 → 终态写入（operations_sync）
     if intent == "high" or action == "accept":
-        return "end"
+        return "operations_sync"
 
     # 修订请求且未超限 → 再给一次机会
     if action == "revise" and count < MAX_REVISIONS:
         return "revision_loop"
 
-    # 放弃或超限 → 转人工
+    # 放弃或超限 → 转人工（human_handoff 之后进入 operations_sync）
     return "human_handoff"
