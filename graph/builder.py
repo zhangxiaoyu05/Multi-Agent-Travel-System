@@ -1,19 +1,28 @@
-"""LangGraph 图构建——Phase 3
+"""LangGraph 图构建——Phase 4
 
 组装所有节点和边，编译为可执行的 StateGraph。
 
-当前图结构：
+完整图结构（Phase 4）：
     START → input_guard → session_context → intent_router
                                                    │
-         ┌─────────────────────────────────────────┼───────────────────────┐
-         ▼                                         ▼                       ▼
-  customer_service                          trip_planner            human_handoff
-         │                                    (Phase 4)                  │
-         ├─ after_service                                               │
-         │                                                              ▼
-         ├─→ human_handoff ─────────────────────────────────────────→ END
-         ├─→ intent_router (重新路由)
-         └─→ END
+         ┌─────────────────────────────────────────┼──────────────────────────┐
+         ▼                                         ▼                          ▼
+  customer_service                          trip_planner               human_handoff
+         │                                  │        ▲                       │
+         ├─ after_service                  ├─ requirements_complete         │
+         │                                 │        │                       │
+         ├─→ human_handoff ────────────────┤   ┌────┴────────┐              │
+         ├─→ intent_router                 │   ▼             ▼              │
+         └─→ END                           │ intent_scorer  END            │
+                                           │   │                            │
+                                           │   ├─ revision_decision         │
+                                           │   │   ├─ end → END            │
+                                           │   │   ├─ revision_loop ───────┘│
+                                           │   │   └─ human_handoff ────────┤
+                                           │   │                            ▼
+                                           │   └──────────────────────────→ END
+                                           │
+                                           └──→ END (缺信息等待下一轮)
 """
 
 from langgraph.graph import StateGraph, START, END
@@ -26,21 +35,16 @@ from graph.nodes.input_guard import input_guard
 from graph.nodes.session_context import session_context
 from graph.nodes.intent_router import intent_router
 from graph.nodes.customer_service import customer_service
+from graph.nodes.trip_planner import trip_planner
+from graph.nodes.intent_scorer import intent_scorer
+from graph.nodes.revision_loop import revision_loop
 from graph.nodes.human_handoff import human_handoff
 
 # Conditions
 from graph.conditions.route_decision import route_decision
 from graph.conditions.after_service import after_service
-
-
-# =============================================================================
-# 占位节点（Phase 4 替换为真实实现）
-# =============================================================================
-
-
-def _placeholder_trip_planner(state: AgentState) -> dict:
-    """定制占位节点（Phase 4 替换）"""
-    return {"final_reply": "[定制] 功能开发中，即将支持行程规划与草案生成。"}
+from graph.conditions.requirements_complete import requirements_complete
+from graph.conditions.revision_decision import revision_decision
 
 
 # =============================================================================
@@ -54,15 +58,22 @@ def build_graph():
     图结构：
         START → input_guard → session_context → intent_router
                                                       │
-              ┌───────────────────────────────────────┼───────────────────┐
-              ▼                                       ▼                   ▼
-       customer_service                         trip_planner        human_handoff
-              │                                 (placeholder)             │
-              ├─ after_service                                           │
-              │                                                          ▼
-              ├─→ human_handoff ─────────────────────────────────────→ END
-              ├─→ intent_router
-              └─→ END
+        ┌─────────────────────────────────────────────┼──────────────────────────┐
+        ▼                                             ▼                          ▼
+        customer_service                       trip_planner               human_handoff
+        │                                       │        ▲                       │
+        ├─ after_service                       ├─ requirements_complete         │
+        │  ├─→ human_handoff ──────────────────┤   ├─→ intent_scorer            │
+        │  ├─→ intent_router                   │   └─→ END                     │
+        │  └─→ END                             │                                │
+        │                                      └─→ intent_scorer               │
+        │                                          │                            │
+        │                                          ├─ revision_decision         │
+        │                                          │  ├─→ END                   │
+        │                                          │  ├─→ revision_loop ────────┤
+        │                                          │  └─→ human_handoff         │
+        │                                          │                            ▼
+        └──────────────────────────────────────────┼──────────────────────→ END
 
     Returns:
         编译后的 StateGraph（含 MemorySaver checkpoint）
@@ -74,21 +85,23 @@ def build_graph():
     builder.add_node("session_context", session_context)
     builder.add_node("intent_router", intent_router)
 
-    # Phase 3 真实节点
+    # Phase 3 节点
     builder.add_node("customer_service", customer_service)
     builder.add_node("human_handoff", human_handoff)
 
-    # Phase 4 占位节点
-    builder.add_node("trip_planner", _placeholder_trip_planner)
+    # Phase 4 节点
+    builder.add_node("trip_planner", trip_planner)
+    builder.add_node("intent_scorer", intent_scorer)
+    builder.add_node("revision_loop", revision_loop)
 
     # ====== 边 ======
 
-    # 主干线：按顺序串联
+    # 主干线
     builder.add_edge(START, "input_guard")
     builder.add_edge("input_guard", "session_context")
     builder.add_edge("session_context", "intent_router")
 
-    # 路由分发：根据意图分数选择分支
+    # 路由分发
     builder.add_conditional_edges(
         "intent_router",
         route_decision,
@@ -99,7 +112,7 @@ def build_graph():
         }
     )
 
-    # 客服分支：after_service 条件边
+    # ---- 客服分支 ----
     builder.add_conditional_edges(
         "customer_service",
         after_service,
@@ -110,8 +123,31 @@ def build_graph():
         }
     )
 
-    # 终端节点 → END
-    builder.add_edge("trip_planner", END)
+    # ---- 定制分支：必填项检查 ----
+    builder.add_conditional_edges(
+        "trip_planner",
+        requirements_complete,
+        {
+            "intent_scorer": "intent_scorer",
+            "end": END,
+        }
+    )
+
+    # ---- 定制分支：修订决策 ----
+    builder.add_conditional_edges(
+        "intent_scorer",
+        revision_decision,
+        {
+            "end": END,
+            "revision_loop": "revision_loop",
+            "human_handoff": "human_handoff",
+        }
+    )
+
+    # 修订循环回到定制
+    builder.add_edge("revision_loop", "trip_planner")
+
+    # 人工接管 → END
     builder.add_edge("human_handoff", END)
 
     # ====== 编译 ======

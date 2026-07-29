@@ -27,136 +27,154 @@ def safe_print(*args, **kwargs):
 
 
 def test_graph():
-    """命令行快速测试 LangGraph 图——Phase 3
+    """命令行快速测试 LangGraph 图——Phase 4
 
     发送多条测试消息，验证：
-    - 意图路由是否正常
-    - 客服 Agent 是否正确调用 FAQ 工具
-    - 投诉是否正确触发转人工 + 交接单生成
-    - after_service 条件边流转
-    - checkpoint 是否正常持久化
+    - 意图路由 + 客服 FAQ + 投诉转人工（Phase 3 回归）
+    - 定制需求提取 + 必填项检查 + 追问
+    - 完整信息 → 工具调用 + 行程草案生成
+    - 意向评分 + 修订循环
+    - checkpoint 持久化（多轮需求收集）
     """
     from graph.builder import build_graph
 
     safe_print("=" * 60)
-    safe_print("LangGraph Graph Test —— Phase 3")
+    safe_print("LangGraph Graph Test —— Phase 4")
     safe_print("=" * 60)
 
     graph = build_graph()
 
-    # ---- 测试 1：客服 FAQ（签证查询）----
-    safe_print("\n>>> Test 1: Customer Service — FAQ (Visa)")
+    # ---- 测试 1：定制——信息不全需追问 ----
+    safe_print("\n>>> Test 1: Planner — Missing Fields (ask follow-up)")
     safe_print("-" * 40)
 
-    result = graph.invoke(
+    result1 = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "签证需要什么材料？"}],
-            "session_id": "test-001",
-            "customer_id": "cust-001",
+            "messages": [{"role": "user", "content": "我想去西安玩几天"}],
+            "session_id": "test-p4-01",
+            "customer_id": "cust-p4-01",
             "channel": "web",
             "language": "zh",
         },
-        config={"configurable": {"thread_id": "test-001"}},
+        config={"configurable": {"thread_id": "test-p4-01"}},
     )
 
-    safe_print(f"  Intent scores  : {result.get('intent_scores')}")
-    safe_print(f"  need_human     : {result.get('need_human')}")
-    safe_print(f"  Branch         : {result.get('current_branch')}")
-    safe_print(f"  Reply (trunc)  : {result.get('final_reply', '')[:150]}")
+    safe_print(f"  Intent scores  : {result1.get('intent_scores')}")
+    safe_print(f"  Branch         : {result1.get('current_branch')}")
+    safe_print(f"  need_human     : {result1.get('need_human')}")
+    safe_print(f"  Need collected : { {k:v for k,v in result1.get('need',{}).items() if v} }")
+    safe_print(f"  Draft version  : {result1.get('draft', {}).get('version', 'N/A')}")
+    safe_print(f"  Reply (trunc)  : {result1.get('final_reply', '')[:200]}")
 
-    # ---- 测试 2：客服 FAQ（支付查询）----
-    safe_print("\n>>> Test 2: Customer Service — FAQ (Payment)")
+    # ---- 测试 2：定制——完整信息生成草案 ----
+    safe_print("\n>>> Test 2: Planner — Full Info → Generate Itinerary")
     safe_print("-" * 40)
 
     result2 = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "在中国旅游怎么支付？"}],
-            "session_id": "test-002",
-            "customer_id": "cust-002",
+            "messages": [{"role": "user", "content": "我想去西安玩4天，8月15号到，2个人，预算每人1500美元，喜欢历史文化，轻松节奏"}],
+            "session_id": "test-p4-02",
+            "customer_id": "cust-p4-02",
             "channel": "web",
             "language": "zh",
         },
-        config={"configurable": {"thread_id": "test-002"}},
+        config={"configurable": {"thread_id": "test-p4-02"}},
     )
 
     safe_print(f"  Intent scores  : {result2.get('intent_scores')}")
-    safe_print(f"  need_human     : {result2.get('need_human')}")
     safe_print(f"  Branch         : {result2.get('current_branch')}")
-    safe_print(f"  Reply (trunc)  : {result2.get('final_reply', '')[:150]}")
+    safe_print(f"  need_human     : {result2.get('need_human')}")
+    safe_print(f"  Need collected : { {k:v for k,v in result2.get('need',{}).items() if v} }")
+    safe_print(f"  Draft version  : {result2.get('draft', {}).get('version', 'N/A')}")
+    safe_print(f"  Intent level   : {result2.get('intent_level')}")
+    safe_print(f"  Next action    : {result2.get('next_action')}")
+    safe_print(f"  Reply (trunc)  : {result2.get('final_reply', '')[:200]}")
 
-    # ---- 测试 3：投诉 → 人工接管（含交接单）----
-    safe_print("\n>>> Test 3: Complaint -> Human Handoff (with summary)")
+    # ---- 测试 3：多轮收集——同一 thread 补全信息 ----
+    safe_print("\n>>> Test 3: Planner — Multi-turn info collection")
     safe_print("-" * 40)
 
-    result3 = graph.invoke(
+    # 3a: 第一轮——只说目的地
+    _ = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "我要投诉你们的导游，态度太差了！"}],
-            "session_id": "test-003",
-            "customer_id": "cust-003",
+            "messages": [{"role": "user", "content": "想去成都"}],
+            "session_id": "test-p4-03",
+            "customer_id": "cust-p4-03",
             "channel": "web",
             "language": "zh",
         },
-        config={"configurable": {"thread_id": "test-003"}},
+        config={"configurable": {"thread_id": "test-p4-03"}},
     )
 
-    safe_print(f"  Intent scores  : {result3.get('intent_scores')}")
-    safe_print(f"  need_human     : {result3.get('need_human')}")
-    safe_print(f"  Branch         : {result3.get('current_branch')}")
-    safe_print(f"  Reply (trunc)  : {result3.get('final_reply', '')[:200]}")
+    # 3b: 第二轮——补全大部分信息
+    result3b = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "5天，8月20号到，3个人，预算每人1000美元，喜欢美食"}],
+        },
+        config={"configurable": {"thread_id": "test-p4-03"}},
+    )
 
-    # ---- 测试 4：客服 → 人工接管流转（after_service 条件边）----
-    safe_print("\n>>> Test 4: CS -> Handoff flow (after_service edge)")
+    safe_print(f"  Intent scores  : {result3b.get('intent_scores')}")
+    safe_print(f"  Branch         : {result3b.get('current_branch')}")
+    safe_print(f"  Need collected : { {k:v for k,v in result3b.get('need',{}).items() if v} }")
+    safe_print(f"  Draft version  : {result3b.get('draft', {}).get('version', 'N/A')}")
+    safe_print(f"  Intent level   : {result3b.get('intent_level')}")
+    safe_print(f"  Reply (trunc)  : {result3b.get('final_reply', '')[:200]}")
+
+    # ---- 测试 4：修订循环——用户要求修改行程 ----
+    safe_print("\n>>> Test 4: Planner — Revision Loop")
     safe_print("-" * 40)
 
     result4 = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "我要退款，全部退款！"}],
-            "session_id": "test-004",
-            "customer_id": "cust-004",
-            "channel": "web",
-            "language": "zh",
+            "messages": [{"role": "user", "content": "能不能多加点美食推荐的环节？"}],
         },
-        config={"configurable": {"thread_id": "test-004"}},
+        config={"configurable": {"thread_id": "test-p4-02"}},  # 复用 test-p4-02 的 session
     )
 
-    safe_print(f"  Intent scores  : {result4.get('intent_scores')}")
-    safe_print(f"  need_human     : {result4.get('need_human')}")
     safe_print(f"  Branch         : {result4.get('current_branch')}")
+    safe_print(f"  Draft version  : {result4.get('draft', {}).get('version', 'N/A')}")
+    safe_print(f"  Revision count : {result4.get('revision_count')}")
+    safe_print(f"  Intent level   : {result4.get('intent_level')}")
+    safe_print(f"  Next action    : {result4.get('next_action')}")
     safe_print(f"  Reply (trunc)  : {result4.get('final_reply', '')[:200]}")
 
-    # ---- 测试 5：定制意图（占位节点）----
-    safe_print("\n>>> Test 5: Trip Planner Intent (placeholder)")
+    # ---- 测试 5：客服 FAQ（Phase 3 回归）----
+    safe_print("\n>>> Test 5: CS — FAQ Regression")
     safe_print("-" * 40)
 
     result5 = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "我想去西安玩3天，有什么推荐？"}],
-            "session_id": "test-005",
-            "customer_id": "cust-005",
+            "messages": [{"role": "user", "content": "签证需要什么材料？"}],
+            "session_id": "test-p4-05",
+            "customer_id": "cust-p4-05",
             "channel": "web",
             "language": "zh",
         },
-        config={"configurable": {"thread_id": "test-005"}},
+        config={"configurable": {"thread_id": "test-p4-05"}},
     )
 
     safe_print(f"  Intent scores  : {result5.get('intent_scores')}")
     safe_print(f"  need_human     : {result5.get('need_human')}")
-    safe_print(f"  Reply (trunc)  : {result5.get('final_reply', '')[:100]}")
+    safe_print(f"  Reply (trunc)  : {result5.get('final_reply', '')[:150]}")
 
-    # ---- 测试 6：Checkpoint 持久化（同 thread 追问）----
-    safe_print("\n>>> Test 6: Checkpoint Persistence (same thread)")
+    # ---- 测试 6：投诉转人工（Phase 3 回归）----
+    safe_print("\n>>> Test 6: CS — Complaint → Handoff (Regression)")
     safe_print("-" * 40)
 
     result6 = graph.invoke(
         {
-            "messages": [{"role": "user", "content": "退改政策是什么？"}],
+            "messages": [{"role": "user", "content": "我要投诉，导游完全不专业！"}],
+            "session_id": "test-p4-06",
+            "customer_id": "cust-p4-06",
+            "channel": "web",
+            "language": "zh",
         },
-        config={"configurable": {"thread_id": "test-001"}},  # 相同 thread_id！
+        config={"configurable": {"thread_id": "test-p4-06"}},
     )
 
-    safe_print(f"  Intent scores  : {result6.get('intent_scores')}")
+    safe_print(f"  need_human     : {result6.get('need_human')}")
     safe_print(f"  Reply (trunc)  : {result6.get('final_reply', '')[:150]}")
-    safe_print(f"  Message history: {len(result6.get('messages', []))}")
 
     safe_print("\n" + "=" * 60)
     safe_print("[OK] All 6 tests completed!")

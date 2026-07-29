@@ -140,6 +140,50 @@ main.py                                  ← 更新：扩展为 6 组测试
 - 测试 5：定制意图 → 正确路由到 trip_planner（占位）
 - 测试 6：同 thread 追问 → checkpoint 持久化正常（message history: 2）
 
+## 三-续4、Phase 4 完成——定制 Agent + 修订循环 ✅
+
+**完成时间**：2026-07-29
+
+### 创建/更新的文件
+
+```
+tools/
+├── mock_weather.py                      ← 新增：Mock 天气工具（12个城市）
+├── mock_calendar.py                     ← 新增：Mock 节假日/人流量工具
+└── mock_inventory.py                    ← 新增：Mock 库存工具（酒店/门票/车辆）
+prompts/
+└── trip_planner.txt                     ← 新增：定制 Prompt 模板
+agents/
+└── trip_planner.py                      ← 新增：TripPlannerAgent（需求提取+草案生成）
+graph/nodes/
+├── trip_planner.py                      ← 新增：定制节点（替换占位）
+├── intent_scorer.py                     ← 新增：意向评分节点
+└── revision_loop.py                     ← 新增：修订计数器
+graph/conditions/
+├── requirements_complete.py             ← 新增：必填项检查条件边
+└── revision_decision.py                 ← 新增：修订决策条件边
+graph/builder.py                         ← 更新：完整定制分支链
+main.py                                  ← 更新：6 组测试（含定制+修订）
+```
+
+### 关键实现
+
+- **TripPlannerAgent**：最复杂的 Agent，分四步走——① LLM 结构化提取需求字段（NeedExtract）；② 合并 checkpoint 已有 need，检查必填项（destination/days/date/pax/budget）；③ 缺失则友好追问（展示已确认信息+缺失项）；④ 齐全则调用 weather/calendar/inventory 三个工具获取实时数据，传给 LLM 生成 Markdown 行程草案
+- **需求字段提取**：使用轻量 router_llm + `with_structured_output(NeedExtract)`，只提取用户明确提到的信息，不猜测
+- **Mock 工具组**：weather（12个城市模拟天气）、calendar（节假日+工作日+人流量预测）、inventory（酒店/门票/车辆库存），Phase 8 替换为真实 API
+- **意向评分**：使用 `Literal['high','mid','low']` + `Literal['accept','revise','give_up']` 严格约束输出，含一致性后处理（修订>=3次强制 accept/give_up）
+- **修订决策**：accept→END，revise+cnt<3→revision_loop→trip_planner，give_up/超限→human_handoff
+- **图结构**：定制分支完整链路 trip_planner → requirements_complete → intent_scorer → revision_decision → {END / revision_loop / human_handoff}
+
+### 验证结果
+
+- `python main.py test` → 6 组测试用例全部通过
+- 测试 1：信息不全 → 正确追问缺失的 4 个必填项
+- 测试 2：完整信息 → 生成 v1 草案，intent=high，action=accept
+- 测试 3：多轮收集 → checkpoint 正确跨轮传递 need，第二轮合并后生成完整行程
+- 测试 4：修订循环 → revision_loop 触发重新生成，v1→v4 迭代，最终 accept 退出
+- 测试 5-6：客服 FAQ 和投诉转人工 Phase 3 回归正常
+
 **完成时间**：2026-07-28
 
 ### 创建的文件清单
@@ -199,7 +243,7 @@ Phase 0  ██████████  ✅ 项目骨架 + Docker 环境       
 Phase 1  ██████████  ✅ State 定义 + 最简图             2026-07-29 完成
 Phase 2  ██████████  ✅ 意图路由器完善                  2026-07-29 完成
 Phase 3  ██████████  ✅ 客服 Agent + 人工接管             2026-07-29 完成
-Phase 4  ░░░░░░░░░░  定制 Agent + 修订循环             待开始
+Phase 4  ██████████  ✅ 定制 Agent + 修订循环             2026-07-29 完成
 Phase 5  ░░░░░░░░░░  终态写入 + /chat API 联调         待开始
 ────────── MVP 完成线 ─────────────────────────────────────
 Phase 6  ░░░░░░░░░░  销售 Agent + 运营 Agent           后续
@@ -207,9 +251,9 @@ Phase 7  ░░░░░░░░░░  RAG 增强（真实向量检索）     
 Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
 ```
 
-### 下一步：Phase 4
+### 下一步：Phase 5
 
-**目标**：实现定制 Agent（TripPlannerAgent）+ 修订循环（revision_loop），含需求提取、必填项检查、Tool 调用、草案生成、意向评分、修订决策。
+**目标**：终态写入（operations_sync 节点，写 CRM + 发 CAPI 事件）+ `/chat` API 联调，打通完整前后端链路。
 
 **将创建的文件**：
 
@@ -244,3 +288,4 @@ prompts/intent_router.txt     # 路由 Prompt 模板
 | 2026-07-29 | Phase 2：意图路由器改用 with_structured_output | ✅ |
 | 2026-07-29 | 更新 main.py 添加 test 模式，4 组测试用例 | ✅ |
 | 2026-07-29 | Phase 3：客服 Agent（LLM+Tools）+ 人工接管（交接单）+ after_service 条件边 | ✅ |
+| 2026-07-29 | Phase 4：定制 Agent（需求提取+草案生成）+ 修订循环 + 意向评分 | ✅ |
