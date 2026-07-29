@@ -98,6 +98,48 @@ main.py                          ← 更新：添加 test 模式
 - 图结构正确编译，checkpoint 正常持久化
 - 意图路由能够正确区分定制/客服/投诉类消息
 
+## 三-续3、Phase 3 完成——客服 Agent + 人工接管 ✅
+
+**完成时间**：2026-07-29
+
+### 创建/更新的文件
+
+```
+agents/
+├── base.py                              ← 新增：BaseAgent 抽象基类
+└── customer_service.py                  ← 新增：客服 Agent（LLM + Tools）
+tools/
+├── mock_faq.py                          ← 新增：Mock FAQ 检索（10 个常见类别）
+└── mock_handoff.py                      ← 新增：转人工评估工具
+prompts/
+└── customer_service.txt                 ← 新增：客服 Prompt 模板
+graph/nodes/
+├── customer_service.py                  ← 新增：客服节点（替换占位）
+└── human_handoff.py                     ← 新增：人工接管节点（生成交接单）
+graph/conditions/
+└── after_service.py                     ← 新增：客服后置条件边
+graph/builder.py                         ← 更新：替换客服+接管占位节点
+main.py                                  ← 更新：扩展为 6 组测试
+```
+
+### 关键实现
+
+- **BaseAgent**：抽象基类，统一 `llm + tools + system_prompt` 的 Agent 模式，提供 `_get_user_message()` 和 `_get_message_history()` 工具方法
+- **CustomerServiceAgent**：使用 `llm.bind_tools()` 绑定 `search_faq` 和 `check_handoff` 两个工具，LLM 自主决策是否调用工具，支持多轮 tool calling
+- **Mock FAQ 知识库**：覆盖签证、支付、退改、天气、小费、网络、交通、安全、美食、语言 10 大类，支持中英文关键词匹配
+- **Mock Handoff**：基于关键词（投诉、退款、差评等）判断是否需要转人工，含强信号检测
+- **after_service 条件边**：need_human → human_handoff / 有回复 → END / 无回复 → intent_router（支持重新路由）
+- **人工接管节点**：生成结构化交接单（客户 ID、渠道、意图分数、出行需求、草案摘要、最后消息）
+- **图结构更新**：客服分支改为条件边（3 路分发），human_handoff 直连 END
+
+### 验证结果
+
+- `python main.py test` → 6 组测试用例全部通过
+- 测试 1-2：FAQ 查询（签证/支付）→ 正确调用 search_faq 并生成自然语言回复
+- 测试 3-4：投诉/退款 → 正确触发 need_human=True，生成交接单
+- 测试 5：定制意图 → 正确路由到 trip_planner（占位）
+- 测试 6：同 thread 追问 → checkpoint 持久化正常（message history: 2）
+
 **完成时间**：2026-07-28
 
 ### 创建的文件清单
@@ -156,7 +198,7 @@ D:\Multi_Agent\
 Phase 0  ██████████  ✅ 项目骨架 + Docker 环境         2026-07-28 完成
 Phase 1  ██████████  ✅ State 定义 + 最简图             2026-07-29 完成
 Phase 2  ██████████  ✅ 意图路由器完善                  2026-07-29 完成
-Phase 3  ░░░░░░░░░░  客服 Agent + 人工接管             待开始
+Phase 3  ██████████  ✅ 客服 Agent + 人工接管             2026-07-29 完成
 Phase 4  ░░░░░░░░░░  定制 Agent + 修订循环             待开始
 Phase 5  ░░░░░░░░░░  终态写入 + /chat API 联调         待开始
 ────────── MVP 完成线 ─────────────────────────────────────
@@ -165,9 +207,9 @@ Phase 7  ░░░░░░░░░░  RAG 增强（真实向量检索）     
 Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
 ```
 
-### 下一步：Phase 1
+### 下一步：Phase 4
 
-**目标**：定义完整的 AgentState，搭建从用户消息到路由结果的最简图，验证 LangGraph 能正常 invoke。
+**目标**：实现定制 Agent（TripPlannerAgent）+ 修订循环（revision_loop），含需求提取、必填项检查、Tool 调用、草案生成、意向评分、修订决策。
 
 **将创建的文件**：
 
@@ -201,3 +243,4 @@ prompts/intent_router.txt     # 路由 Prompt 模板
 | 2026-07-29 | Phase 1：创建 AgentState、LLM 工厂、3 个图节点、路由条件 | ✅ |
 | 2026-07-29 | Phase 2：意图路由器改用 with_structured_output | ✅ |
 | 2026-07-29 | 更新 main.py 添加 test 模式，4 组测试用例 | ✅ |
+| 2026-07-29 | Phase 3：客服 Agent（LLM+Tools）+ 人工接管（交接单）+ after_service 条件边 | ✅ |

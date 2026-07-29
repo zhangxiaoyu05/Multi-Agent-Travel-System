@@ -1,7 +1,19 @@
-"""LangGraph 图构建——Phase 1-2
+"""LangGraph 图构建——Phase 3
 
 组装所有节点和边，编译为可执行的 StateGraph。
-骨架版：客服、定制、人工接管均为占位节点，Phase 3-4 替换为真实实现。
+
+当前图结构：
+    START → input_guard → session_context → intent_router
+                                                   │
+         ┌─────────────────────────────────────────┼───────────────────────┐
+         ▼                                         ▼                       ▼
+  customer_service                          trip_planner            human_handoff
+         │                                    (Phase 4)                  │
+         ├─ after_service                                               │
+         │                                                              ▼
+         ├─→ human_handoff ─────────────────────────────────────────→ END
+         ├─→ intent_router (重新路由)
+         └─→ END
 """
 
 from langgraph.graph import StateGraph, START, END
@@ -13,32 +25,22 @@ from graph.state import AgentState
 from graph.nodes.input_guard import input_guard
 from graph.nodes.session_context import session_context
 from graph.nodes.intent_router import intent_router
+from graph.nodes.customer_service import customer_service
+from graph.nodes.human_handoff import human_handoff
 
 # Conditions
 from graph.conditions.route_decision import route_decision
+from graph.conditions.after_service import after_service
 
 
 # =============================================================================
-# 占位节点（Phase 3-4 替换为真实实现）
+# 占位节点（Phase 4 替换为真实实现）
 # =============================================================================
-
-
-def _placeholder_customer_service(state: AgentState) -> dict:
-    """客服占位节点"""
-    return {"final_reply": "[客服] 功能开发中，即将支持 FAQ 答疑与订单查询。"}
 
 
 def _placeholder_trip_planner(state: AgentState) -> dict:
-    """定制占位节点"""
+    """定制占位节点（Phase 4 替换）"""
     return {"final_reply": "[定制] 功能开发中，即将支持行程规划与草案生成。"}
-
-
-def _placeholder_human_handoff(state: AgentState) -> dict:
-    """人工接管占位节点"""
-    return {
-        "final_reply": "正在为您转接人工客服，请稍候...",
-        "need_human": True,
-    }
 
 
 # =============================================================================
@@ -52,12 +54,15 @@ def build_graph():
     图结构：
         START → input_guard → session_context → intent_router
                                                       │
-                          ┌───────────────────────────┼───────────────────┐
-                          ▼                           ▼                   ▼
-                   customer_service             trip_planner        human_handoff
-                          │                           │                   │
-                          ▼                           ▼                   ▼
-                         END                         END                 END
+              ┌───────────────────────────────────────┼───────────────────┐
+              ▼                                       ▼                   ▼
+       customer_service                         trip_planner        human_handoff
+              │                                 (placeholder)             │
+              ├─ after_service                                           │
+              │                                                          ▼
+              ├─→ human_handoff ─────────────────────────────────────→ END
+              ├─→ intent_router
+              └─→ END
 
     Returns:
         编译后的 StateGraph（含 MemorySaver checkpoint）
@@ -69,10 +74,12 @@ def build_graph():
     builder.add_node("session_context", session_context)
     builder.add_node("intent_router", intent_router)
 
-    # 占位节点（Phase 3-5 逐步替换为真实实现）
-    builder.add_node("customer_service", _placeholder_customer_service)
+    # Phase 3 真实节点
+    builder.add_node("customer_service", customer_service)
+    builder.add_node("human_handoff", human_handoff)
+
+    # Phase 4 占位节点
     builder.add_node("trip_planner", _placeholder_trip_planner)
-    builder.add_node("human_handoff", _placeholder_human_handoff)
 
     # ====== 边 ======
 
@@ -92,8 +99,18 @@ def build_graph():
         }
     )
 
+    # 客服分支：after_service 条件边
+    builder.add_conditional_edges(
+        "customer_service",
+        after_service,
+        {
+            "human_handoff": "human_handoff",
+            "intent_router": "intent_router",
+            "end": END,
+        }
+    )
+
     # 终端节点 → END
-    builder.add_edge("customer_service", END)
     builder.add_edge("trip_planner", END)
     builder.add_edge("human_handoff", END)
 
