@@ -47,6 +47,57 @@
 
 ## 三、Phase 0 完成——项目骨架与 Docker 环境 ✅
 
+## 三-续、Phase 1 完成——State 定义 + 最简图 ✅
+
+**完成时间**：2026-07-29
+
+### 创建/更新的文件
+
+```
+graph/
+├── state.py                     ← 新增：AgentState 定义
+│   ├── TripNeed (TypedDict)     # 出行需求字段
+│   ├── TripDraft (TypedDict)    # 行程草案字段
+│   └── AgentState (MessagesState) # 全局 State
+├── builder.py                   ← 新增：build_graph() 最简图
+├── nodes/
+│   ├── input_guard.py           ← 新增：入参保护
+│   ├── session_context.py       ← 新增：会话初始化
+│   └── intent_router.py         ← 新增：意图路由（Phase 2 版）
+├── conditions/
+│   └── route_decision.py        ← 新增：路由分发条件
+services/
+└── llm.py                       ← 新增：LLM 工厂（百炼）
+prompts/
+├── __init__.py                  ← 重写：load_prompt() 加载工具
+└── intent_router.txt            ← 新增：路由 Prompt 模板
+main.py                          ← 更新：添加 test 模式
+```
+
+### 关键实现
+
+- **AgentState**：继承 MessagesState，包含渠道/路由/业务/控制/输出五大类字段
+- **LLM 工厂**：`get_router_llm()` (qwen-turbo) 和 `get_agent_llm()` (qwen-plus)，均从环境变量读取
+- **图结构**：START → input_guard → session_context → intent_router → 条件分发 → END
+- **占位节点**：customer_service / trip_planner / human_handoff 均为占位，Phase 3-5 逐步替换
+
+## 三-续2、Phase 2 完成——意图路由器完善 ✅
+
+**完成时间**：2026-07-29
+
+### 改进内容
+
+- **结构化输出**：定义 `IntentResult` Pydantic 模型，使用 `llm.with_structured_output()` 替代裸 `json.loads`
+- **异常兜底**：LLM 调用失败时默认进客服分支，不会崩溃
+- **空消息保护**：无消息或空消息时返回默认分类
+- **路由逻辑**：need_human 优先 → 最高分意图 → 低置信度兜底
+
+### 验证结果
+
+- `python main.py test` → 4 组测试用例全部通过
+- 图结构正确编译，checkpoint 正常持久化
+- 意图路由能够正确区分定制/客服/投诉类消息
+
 **完成时间**：2026-07-28
 
 ### 创建的文件清单
@@ -103,8 +154,8 @@ D:\Multi_Agent\
 
 ```
 Phase 0  ██████████  ✅ 项目骨架 + Docker 环境         2026-07-28 完成
-Phase 1  ░░░░░░░░░░  State 定义 + 最简图               待开始
-Phase 2  ░░░░░░░░░░  意图路由器完善                    待开始
+Phase 1  ██████████  ✅ State 定义 + 最简图             2026-07-29 完成
+Phase 2  ██████████  ✅ 意图路由器完善                  2026-07-29 完成
 Phase 3  ░░░░░░░░░░  客服 Agent + 人工接管             待开始
 Phase 4  ░░░░░░░░░░  定制 Agent + 修订循环             待开始
 Phase 5  ░░░░░░░░░░  终态写入 + /chat API 联调         待开始
@@ -147,3 +198,6 @@ prompts/intent_router.txt     # 路由 Prompt 模板
 | 2026-07-28 | pip install 依赖安装 | ✅ |
 | 2026-07-28 | FastAPI 启动验证 | ✅ |
 | 2026-07-28 | 写入 `progress.md` 进度日志 | ✅ |
+| 2026-07-29 | Phase 1：创建 AgentState、LLM 工厂、3 个图节点、路由条件 | ✅ |
+| 2026-07-29 | Phase 2：意图路由器改用 with_structured_output | ✅ |
+| 2026-07-29 | 更新 main.py 添加 test 模式，4 组测试用例 | ✅ |
