@@ -172,6 +172,20 @@ python main.py
 }
 ```
 
+### `POST /chat/stream`
+
+**流式对话接口**（SSE）—— 实时推送图节点执行进度，避免长时间等待"思考中"。
+
+事件格式：
+```
+event: node_start      → {"node":"intent_router","label":"正在分析意图..."}
+event: node_complete   → {"node":"intent_router"}
+...
+event: done            → {完整 ChatResponse}
+```
+
+> `/chat/stream` 暂不可用时前端自动降级回退到 `/chat` 普通 JSON 模式。
+
 ### `POST /chat`
 
 核心对话接口。
@@ -235,6 +249,7 @@ python main.py
 | Phase 6 | 销售 Agent + 运营 Agent | ✅ |
 | Phase 7 | RAG 增强（Milvus 向量检索） | ✅ |
 | Phase 8 | 基础设施升级（MySQL + Redis + Docker 全容器化） | ✅ |
+| Phase 9 | SSE 流式输出（进度推送 + 降级兼容） | ✅ |
 
 ## 许可证
 

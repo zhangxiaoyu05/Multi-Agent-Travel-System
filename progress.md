@@ -254,6 +254,7 @@ Phase 5  ██████████  ✅ 终态写入 + /chat API 联调    
 Phase 6  ██████████  ✅ 销售 Agent + 运营 Agent         2026-07-30 完成
 Phase 7  ██████████  ✅ RAG 增强（真实向量检索）         2026-07-30 完成
 Phase 8  ██████████  ✅ 基础设施升级（Milvus+MySQL+Redis）  2026-07-30 完成
+Phase 9  ██████████  ✅ SSE 流式输出（进度推送 + 降级兼容）   2026-07-30 完成
 ```
 
 ### 下一步：持续优化
@@ -455,6 +456,53 @@ app (本地)      localhost:8001             ✅ /health /chat 正常
 
 ---
 
+### Phase 9 ✅ SSE 流式输出（2026-07-30）
+
+解决行程生成时 qwen3-max 长时间无响应（30-120s）导致前端"思考中"无限等待的体验问题。
+
+#### 变更摘要
+
+1. **新增 `/chat/stream` SSE 端点**：使用 LangGraph `astream(stream_mode="updates")` 在每个图节点完成时推送进度事件
+2. **前端 SSE 消费**：`fetch()` + `ReadableStream` 替换静态 `fetch()`，实时显示进度标签
+3. **降级兼容**：`/chat/stream` 不可用时自动回退到普通 `/chat` 端点
+4. **零 Agent 侵入**：`stream_mode="updates"` 无需修改任何 Agent 或节点代码
+
+#### 修改文件
+
+```
+api/main.py                   ← 新增 /chat/stream 端点（StreamingResponse + astream）
+                                + NODE_LABELS 进度标签（12 个节点中英文映射）
+frontend/index.html           ← SSE reader + 流式气泡 UI + 降级回退 + CSS fadeIn 动画
+```
+
+#### SSE 事件格式
+
+```
+event: node_start      → {"node":"intent_router","label":"正在分析意图..."}
+event: node_complete   → {"node":"intent_router"}
+event: node_start      → {"node":"trip_planner","label":"正在生成行程..."}
+event: node_complete   → {"node":"trip_planner"}
+event: done            → {完整 ChatResponse}
+event: error           → {"message":"..."}
+```
+
+#### 效果对比
+
+| | 之前 | 现在 |
+|------|------|------|
+| 等待时看到 | "思考中" 一直转 | "⏳ 正在分析意图..." → "⏳ 正在生成行程..." |
+| 超时处理 | 无（无限等待） | 降级到 `/chat` 普通模式 |
+| Agent 修改 | — | **零改动**（`astream(updates)` 无需侵入 Agent） |
+
+#### 验证结果
+
+- `curl /chat/stream` → 逐节点推送 `node_start` → `node_complete` → `done` ✅
+- 浏览器 FAQ 测试 → 前端显示进度标签，不再静态"思考中" ✅
+- `/chat` 旧端点 → 正常返回 JSON，向后兼容 ✅
+- 全部 12 组 `python main.py test --quick` → 通过 ✅
+
+---
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -476,3 +524,5 @@ app (本地)      localhost:8001             ✅ /health /chat 正常
 | 2026-07-30 | Phase 7：RAG 增强——百炼 Embedding + 纯 Python 向量存储 + 30 篇知识库文档 | ✅ |
 | 2026-07-30 | Phase 8：基础设施升级——模型升级 qwen3-max + embedding-v4，Milvus 向量库，MySQL 8.0 + Redis 7，Docker 全容器化（6 服务），MySQL Checkpoint Saver，static→frontend 重命名 | ✅ |
 | 2026-07-30 | Phase 8 调试：Docker 启动修复（MinIO 健康检查、端口冲突、MySQL DDL 主键长度），向量存储改为 Milvus REST + JSON 双模式，移除 pymilvus 依赖，全链路验证通过 | ✅ |
+| 2026-07-30 | Phase 9：SSE 流式输出——新增 `/chat/stream` 端点 + LangGraph astream(updates) + 前端 SSE reader + 进度 UI + `/chat` 降级回退，零 Agent 侵入 | ✅ |
+

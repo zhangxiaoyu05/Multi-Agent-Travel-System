@@ -195,6 +195,16 @@
   .dot-flash span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes dotBounce { 0%,80%,100%{transform:scale(0.6)} 40%{transform:scale(1)} }
 
+  .progress-text {
+    color: var(--primary);
+    font-weight: 500;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0.4; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
   /* ====== Chat Input ====== */
   .chat-input-area {
     padding: 16px 24px; background: var(--surface); border-top: 1px solid var(--border);
@@ -549,7 +559,97 @@ function showToast(msg) {
   setTimeout(() => toast.remove(), 3000);
 }
 
-// ====== API Call ======
+// ====== SSE Reader ======
+function createSSEReader(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return {
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        let eventType = '';
+        let data = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7);
+          } else if (line.startsWith('data: ')) {
+            data = line.slice(6);
+          } else if (line === '' && eventType && data) {
+            try {
+              yield { event: eventType, data: JSON.parse(data) };
+            } catch {
+              yield { event: eventType, data: data };
+            }
+            eventType = '';
+            data = '';
+          }
+        }
+      }
+    },
+    cancel() { reader.cancel(); }
+  };
+}
+
+// ====== Streaming Bubble UI ======
+function showStreamingBubble(id) {
+  const container = document.getElementById('chatMessages');
+  const empty = container.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'msg agent';
+  div.id = id;
+  div.innerHTML = `
+    <div class="msg-avatar">🤖</div>
+    <div>
+      <div class="msg-bubble" id="${id}-content">⏳ 正在处理请求...</div>
+      <div class="msg-meta" id="${id}-meta"></div>
+    </div>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function updateStreamingBubble(id, content) {
+  const bubbleEl = document.getElementById(id + '-content');
+  if (bubbleEl) {
+    bubbleEl.innerHTML = content;
+  }
+  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+}
+
+function appendStreamingToken(id, token) {
+  const bubbleEl = document.getElementById(id + '-content');
+  if (bubbleEl) {
+    bubbleEl.textContent += token;
+  }
+  document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+}
+
+function finalizeStreamingBubble(id, data) {
+  const bubble = document.getElementById(id);
+  if (bubble) bubble.remove();
+
+  renderMessage({
+    role: 'agent',
+    content: data.reply || '(无回复)',
+    branch: data.current_branch,
+    needHuman: data.need_human,
+    intentScores: data.intent_scores,
+    draft: data.draft,
+    quote: data.quote,
+  });
+}
+
+// ====== API Call (primary: SSE, fallback: JSON) ======
 async function sendMessage() {
   const input = document.getElementById('messageInput');
   const message = input.value.trim();
@@ -559,16 +659,17 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
-  // Render user message
   renderMessage({ role: 'user', content: message });
-  showLoading();
+
+  const bubbleId = 'msg-' + Date.now();
+  showStreamingBubble(bubbleId);
 
   const sendBtn = document.getElementById('sendBtn');
   sendBtn.disabled = true;
   input.disabled = true;
 
   try {
-    const resp = await fetch(`${API_BASE}/chat`, {
+    const resp = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -585,26 +686,72 @@ async function sendMessage() {
       throw new Error(errData.detail || `HTTP ${resp.status}`);
     }
 
-    const data = await resp.json();
-    renderMessage({
-      role: 'agent',
-      content: data.reply || '(无回复)',
-      branch: data.current_branch,
-      needHuman: data.need_human,
-      intentScores: data.intent_scores,
-      draft: data.draft,
-      quote: data.quote,
-    });
+    const sse = createSSEReader(resp);
+    for await (const { event, data } of sse) {
+      switch (event) {
+        case 'node_start':
+          updateStreamingBubble(bubbleId, `<span class="progress-text">⏳ ${data.label}</span>`);
+          break;
+        case 'node_complete':
+          // node done, keep current progress text
+          break;
+        case 'token':
+          appendStreamingToken(bubbleId, data.content);
+          break;
+        case 'done':
+          finalizeStreamingBubble(bubbleId, data);
+          break;
+        case 'error':
+          updateStreamingBubble(bubbleId, `❌ 处理失败：${data.message}`);
+          break;
+      }
+    }
   } catch (err) {
-    renderMessage({
-      role: 'agent',
-      content: `❌ 请求失败：${err.message}\n\n请确认后端服务已启动：\`python main.py\``,
-    });
-    showToast('API 连接失败，请确认服务已启动');
+    // Fallback: SSE 不可用时使用普通 /chat
+    if (err.message.includes('stream') || err.message.includes('404')) {
+      updateStreamingBubble(bubbleId, '⏳ 正在使用同步模式...');
+      await sendMessageFallback(bubbleId);
+    } else {
+      updateStreamingBubble(bubbleId, `❌ 请求失败：${err.message}`);
+      showToast('API 连接失败，请确认服务已启动');
+    }
   } finally {
     sendBtn.disabled = false;
     input.disabled = false;
     input.focus();
+  }
+}
+
+async function sendMessageFallback(bubbleId) {
+  const config = getConfig();
+  const input = document.getElementById('messageInput');
+  // Get the last user message from the chat
+  const msgs = document.querySelectorAll('.msg.user .msg-bubble');
+  const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].textContent : '';
+
+  try {
+    const resp = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: config.session_id,
+        customer_id: config.customer_id,
+        channel: config.channel,
+        message: lastMsg,
+        language: config.language,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    finalizeStreamingBubble(bubbleId, data);
+  } catch (err) {
+    updateStreamingBubble(bubbleId, `❌ 请求失败：${err.message}`);
+    showToast('API 连接失败');
   }
 }
 

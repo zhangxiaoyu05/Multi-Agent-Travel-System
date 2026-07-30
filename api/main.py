@@ -12,12 +12,13 @@
 """
 
 import os
+import json
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
@@ -276,3 +277,101 @@ async def chat(req: ChatRequest):
             status_code=500,
             detail=f"处理请求时出错：{str(e)}",
         )
+
+
+# =============================================================================
+# 节点中文标签（SSE 进度推送用）
+# =============================================================================
+
+NODE_LABELS: dict[str, str] = {
+    "input_guard": "正在检查输入...",
+    "session_context": "正在加载会话...",
+    "intent_router": "正在分析意图...",
+    "customer_service": "正在查询知识库...",
+    "trip_planner": "正在生成行程...",
+    "sales_agent": "正在计算报价...",
+    "operations_agent": "正在处理运营请求...",
+    "human_handoff": "正在转接人工...",
+    "operations_sync": "正在同步数据...",
+    "revision_loop": "正在修订行程...",
+    "intent_scorer": "正在评估需求...",
+}
+
+
+# =============================================================================
+# SSE 流式对话接口
+# =============================================================================
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """流式对话接口——SSE 实时推送图节点执行进度 + 最终结果
+
+    相比 /chat，本端点通过 text/event-stream 在 LangGraph
+    每个节点完成时发送进度事件，避免用户长时间看"思考中"。
+
+    事件格式：
+        event: node_start     → {"node": "...", "label": "正在..."}
+        event: node_complete  → {"node": "..."}
+        event: done           → {完整 ChatResponse}
+        event: error          → {"message": "..."}
+    """
+
+    async def _event_stream():
+        initial_state = {
+            "messages": [HumanMessage(content=req.message)],
+            "session_id": req.session_id,
+            "customer_id": req.customer_id,
+            "channel": req.channel,
+            "language": req.language,
+        }
+
+        try:
+            final_state = None
+            async for event in _graph.astream(
+                initial_state,
+                config={"configurable": {"thread_id": req.session_id}},
+                stream_mode="updates",
+            ):
+                for node_name, node_output in event.items():
+                    label = NODE_LABELS.get(node_name, f"正在执行 {node_name}...")
+                    yield f"event: node_start\ndata: {json.dumps({'node': node_name, 'label': label}, ensure_ascii=False)}\n\n"
+                    final_state = node_output
+                    yield f"event: node_complete\ndata: {json.dumps({'node': node_name}, ensure_ascii=False)}\n\n"
+
+            # 构建最终响应
+            if final_state:
+                draft = final_state.get("draft", {}) or {}
+                draft_resp = None
+                if draft.get("itinerary_md"):
+                    draft_resp = {
+                        "version": draft.get("version", 0),
+                        "itinerary_md": draft["itinerary_md"],
+                        "estimated_cost": draft.get("estimated_cost"),
+                        "weather_summary": draft.get("weather_summary"),
+                    }
+
+                resp = {
+                    "reply": final_state.get("final_reply", ""),
+                    "current_branch": final_state.get("current_branch"),
+                    "draft": draft_resp,
+                    "need_human": final_state.get("need_human", False),
+                    "intent_scores": final_state.get("intent_scores"),
+                    "quote": final_state.get("quote"),
+                }
+                yield f"event: done\ndata: {json.dumps(resp, ensure_ascii=False)}\n\n"
+            else:
+                yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            logger.exception(f"SSE 流式处理失败: {e}")
+            yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
