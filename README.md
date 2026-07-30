@@ -128,24 +128,26 @@ docker-compose up --build -d
 docker-compose exec app python scripts/ingest_knowledge.py
 
 # 5. 访问
-# 前端：http://localhost:8000
+# 前端：http://localhost:8000（若端口冲突则用 8001）
 # API 文档：http://localhost:8000/docs
 # 健康检查：http://localhost:8000/health
 ```
 
+> **端口说明**：若宿主机 8000/3306 已被占用，docker-compose.yml 已配置回退端口 8001→8000 / 3307→3306。
+
 ### 本地开发
 
 ```bash
-# 前置条件：启动 MySQL、Redis、Milvus
+# 前置条件：启动基础设施服务
 docker-compose up -d mysql redis etcd minio milvus-standalone
+
+# 若端口冲突，通过环境变量指定端口
+export MYSQL_HOST=localhost MYSQL_PORT=3307
+export REDIS_HOST=localhost
+export MILVUS_HOST=localhost
 
 # 安装依赖
 pip install -r requirements.txt
-
-# 配置 .env（将服务地址改为 localhost）
-# MYSQL_HOST=localhost
-# REDIS_HOST=localhost
-# MILVUS_HOST=localhost
 
 # 启动服务
 python main.py
@@ -210,14 +212,16 @@ python main.py
 
 ## Docker 服务清单
 
-| 服务 | 镜像 | 端口 | 用途 |
+| 服务 | 镜像 | 端口映射 | 用途 |
 |------|------|:---:|------|
-| app | python:3.12-slim | 8000 | FastAPI 后端 |
-| mysql | mysql:8.0 | 3306 | 会话 + Checkpoint 持久化 |
-| redis | redis:7-alpine | 6379 | 会话缓存 |
+| app | python:3.12-slim | 8001→8000 | FastAPI 后端 |
+| mysql | mysql:8.0 | 3307→3306 | 会话 + Checkpoint 持久化 |
+| redis | redis:7-alpine | 6379→6379 | 会话缓存 |
 | etcd | quay.io/coreos/etcd:v3.5.5 | 2379 | Milvus 元数据 |
-| minio | minio/minio | 9000/9001 | Milvus 对象存储 |
-| milvus-standalone | milvusdb/milvus:v2.4.0 | 19530 | 向量检索 |
+| minio | minio/minio | 9000 | Milvus 对象存储 |
+| milvus-standalone | milvusdb/milvus:v2.4.0 | 19530 | 向量检索（REST API） |
+
+> 端口映射可根据宿主机实际情况调整，容器内端口不变。
 
 ## 开发阶段
 

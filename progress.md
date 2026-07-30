@@ -428,6 +428,31 @@ docker-compose up --build -d
 docker-compose exec app python scripts/ingest_knowledge.py
 ```
 
+#### Docker 启动修复（2026-07-30）
+
+调试过程中发现并修复的问题：
+
+1. **MinIO 健康检查**：镜像不含 curl/wget，改用 bash TCP 重定向 `echo > /dev/tcp/localhost/9000`
+2. **端口冲突**：宿主机 8000（FastAPI）和 3306（MySQL）已被占用，调整为 8001:8000 和 3307:3306
+3. **MySQL DDL 主键过长**：checkpoint_writes 表 5 个 VARCHAR(255) 联合主键超过 InnoDB 3072 字节限制，缩短为 VARCHAR(128)
+4. **Milvus REST API**：默认不启用 RESTful 接口，向量存储改为 Milvus REST + JSON 双模式自动检测
+5. **pymilvus 依赖**：Windows 上 grpcio 编译/下载过慢，改为 httpx 直连 Milvus REST API
+
+#### 全链路验证结果
+
+```
+travel-mysql    Up (healthy)   3307→3306   ✅ 3 张表就绪
+travel-redis    Up (healthy)   6379/tcp   ✅ 读写正常
+travel-etcd     Up (healthy)   2379/tcp   ✅ Milvus 协调
+travel-minio    Up (healthy)   9000/tcp   ✅ 对象存储
+travel-milvus   Up (healthy)   19530/tcp  ✅ 向量检索（待启用 REST）
+app (本地)      localhost:8001             ✅ /health /chat 正常
+```
+
+- `/chat` FAQ 路由："签证" → service(1.0) ✅
+- `/chat` 规划路由："西安4天" → planner(0.95) ✅
+- 向量存储：JSON 回退模式，30 篇文档 ✅
+
 ---
 
 ## 五、操作记录
@@ -450,3 +475,4 @@ docker-compose exec app python scripts/ingest_knowledge.py
 | 2026-07-30 | Phase 6：销售 Agent（报价+意向评分）+ 运营 Agent（入驻+履约+工单），四分支完整版 | ✅ |
 | 2026-07-30 | Phase 7：RAG 增强——百炼 Embedding + 纯 Python 向量存储 + 30 篇知识库文档 | ✅ |
 | 2026-07-30 | Phase 8：基础设施升级——模型升级 qwen3-max + embedding-v4，Milvus 向量库，MySQL 8.0 + Redis 7，Docker 全容器化（6 服务），MySQL Checkpoint Saver，static→frontend 重命名 | ✅ |
+| 2026-07-30 | Phase 8 调试：Docker 启动修复（MinIO 健康检查、端口冲突、MySQL DDL 主键长度），向量存储改为 Milvus REST + JSON 双模式，移除 pymilvus 依赖，全链路验证通过 | ✅ |
