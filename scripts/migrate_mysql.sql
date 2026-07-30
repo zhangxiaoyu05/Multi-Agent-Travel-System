@@ -11,7 +11,7 @@
 
 -- 检查点主表：存储每次图执行的完整 State
 CREATE TABLE IF NOT EXISTS checkpoints (
-    thread_id       VARCHAR(255)    NOT NULL COMMENT '会话 ID（对应 session_id）',
+    thread_id       VARCHAR(128)    NOT NULL COMMENT '会话 ID（对应 session_id）',
     checkpoint_ns   VARCHAR(255)    NOT NULL DEFAULT '' COMMENT '命名空间',
     checkpoint_id   VARCHAR(255)    NOT NULL COMMENT '检查点 UUID',
     parent_checkpoint_id VARCHAR(255)         COMMENT '父检查点 UUID（链式链接）',

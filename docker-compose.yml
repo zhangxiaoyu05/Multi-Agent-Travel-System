@@ -8,8 +8,8 @@
 #   docker-compose down
 #
 # 服务清单：
-#   app              - FastAPI 后端（端口 8000）
-#   mysql            - MySQL 8.0（端口 3306）
+#   app              - FastAPI 后端（端口 8001→8000）
+#   mysql            - MySQL 8.0（端口 3307→3306）
 #   redis            - Redis 7（端口 6379）
 #   etcd             - Milvus 元数据协调（端口 2379）
 #   minio            - Milvus 对象存储（端口 9000/9001）
@@ -21,8 +21,6 @@
 #   3. docker-compose up --build -d
 # =============================================================================
 
-version: "3.8"
-
 services:
 
   # ===========================================================================
@@ -32,7 +30,7 @@ services:
     build: .
     container_name: travel-agent
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - .:/app
     env_file:
@@ -60,7 +58,7 @@ services:
     image: mysql:8.0
     container_name: travel-mysql
     ports:
-      - "3306:3306"
+      - "3307:3306"
     environment:
       MYSQL_ROOT_PASSWORD: root123
       MYSQL_DATABASE: travel_agent
@@ -134,7 +132,7 @@ services:
       - minio_data:/minio_data
     command: minio server /minio_data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9000 && echo 'ok' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
