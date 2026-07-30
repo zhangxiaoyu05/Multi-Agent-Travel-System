@@ -68,8 +68,9 @@ Multi_Agent/
 │   ├── trip_planner.py    #   定制 Agent（需求提取 + 草案生成 + 修订）
 │   ├── sales_agent.py     #   销售 Agent（报价 + 意向评分）Phase 6
 │   └── operations_agent.py #  运营 Agent（入驻 + 履约 + 工单）Phase 6
-├── tools/                 # LangChain Tools（MVP 全 Mock）
-│   ├── mock_faq.py        #   FAQ 知识库（签证/支付/退改等 10 类）
+├── tools/                 # LangChain Tools
+│   ├── mock_faq.py        #   FAQ 知识库（关键词匹配，RAG 回退参考）
+│   ├── rag_faq.py         #   RAG 向量检索 FAQ（语义搜索+关键词兜底）Phase 7
 │   ├── mock_handoff.py    #   转人工评估
 │   ├── mock_weather.py    #   天气查询（12 城市）
 │   ├── mock_calendar.py   #   节假日 / 人流量
@@ -77,7 +78,13 @@ Multi_Agent/
 │   ├── mock_quote.py      #   报价生成（32 城市基准价）Phase 6
 │   ├── mock_crm.py        #   CRM 客户记录写入
 │   └── mock_capi.py       #   CAPI 转化事件发送
-├── services/              # 基础设施（LLM 网关）
+├── services/              # 基础设施
+│   ├── llm.py             #   LLM 工厂（百炼 qwen-turbo / qwen-plus）
+│   ├── embeddings.py      #   Embedding 工厂（百炼 DashScope API）Phase 7
+│   └── vector_store.py    #   纯 Python 向量存储（JSON + 余弦相似度）Phase 7
+├── scripts/               # 运维脚本
+│   ├── knowledge_base.py  #   知识库文档定义（30 篇）Phase 7
+│   └── ingest_knowledge.py #  知识库摄入脚本 Phase 7
 ├── prompts/               # System Prompt 模板（5 个）
 │   ├── intent_router.txt
 │   ├── customer_service.txt
@@ -184,7 +191,7 @@ docker-compose up --build
 | Phase 4 | 定制 Agent + 修订循环 | ✅ |
 | Phase 5 | 终态写入 + /chat 联调 | ✅ |
 | Phase 6 | 销售 Agent + 运营 Agent | ✅ |
-| Phase 7 | RAG 增强（真实向量检索） | 后续 |
+| Phase 7 | RAG 增强（真实向量检索） | ✅ |
 | Phase 8 | 生产化 | 后续 |
 
 ## 关键文档

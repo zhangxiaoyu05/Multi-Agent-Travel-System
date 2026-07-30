@@ -8,7 +8,7 @@
 
 from agents.base import BaseAgent
 from graph.state import AgentState
-from tools.mock_faq import search_faq
+from tools.rag_faq import search_faq   # Phase 7：RAG 向量检索 + 关键词兜底
 from tools.mock_handoff import check_handoff
 from services.llm import get_agent_llm
 from prompts import load_prompt

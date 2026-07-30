@@ -247,7 +247,7 @@ Phase 4  ██████████  ✅ 定制 Agent + 修订循环        
 Phase 5  ██████████  ✅ 终态写入 + /chat API 联调         2026-07-29 完成
 ────────── MVP 完成线 ─────────────────────────────────────
 Phase 6  ██████████  ✅ 销售 Agent + 运营 Agent         2026-07-30 完成
-Phase 7  ░░░░░░░░░░  RAG 增强（真实向量检索）           后续
+Phase 7  ██████████  ✅ RAG 增强（真实向量检索）         2026-07-30 完成
 Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
 ```
 
@@ -296,6 +296,44 @@ main.py                                      ← 更新：12 组测试（含 Pha
 - 测试 11：商家入驻咨询 → 正确路由 operations (1.0)，CRM 写入正常
 - 测试 12：订单履约查询 → 正确路由 operations，CRM 写入+履约状态回复完整
 
+### 下一步：Phase 7 ✅ 已完成
+
+**完成时间**：2026-07-30
+
+### 创建/更新的文件
+
+```
+services/
+├── embeddings.py                            ← 新增：百炼 Embedding 工厂（DashScope 原生 API）
+└── vector_store.py                          ← 新增：纯 Python 向量存储（JSON + 余弦相似度）
+scripts/
+├── knowledge_base.py                        ← 新增：知识库文档定义（FAQ 18 篇 + 城市指南 12 篇）
+└── ingest_knowledge.py                      ← 新增：知识库摄入脚本
+tools/
+└── rag_faq.py                               ← 新增：RAG 向量检索 FAQ 工具（语义搜索 + 关键词兜底）
+agents/
+└── customer_service.py                      ← 更新：从 mock_faq 切换到 rag_faq
+.gitignore                                   ← 更新：忽略 data/ 目录
+requirements.txt                             ← 更新：移除 chromadb（零额外依赖）
+.env.example                                 ← 更新：添加 EMBEDDING_MODEL + VECTOR_DB 配置
+```
+
+### 关键实现
+
+- **零额外依赖**：纯 Python 实现向量存储，使用 Python 标准库 + 已有的 httpx。JSON 文件持久化 + 手动余弦相似度计算，无需 numpy/chromadb 等重型依赖
+- **百炼 Embedding API**：直接调用 DashScope 原生 text-embedding API（`text-embedding-v2`），避免 OpenAI 兼容模式的不兼容问题。支持单条和批量向量化
+- **轻量向量存储**：JSON 文件中存储文档内容和预计算的 Embedding 向量。查询时计算余弦相似度排序，相似度阈值 0.3 过滤不相关结果
+- **知识库内容**：30 篇高质量文档——FAQ 18 篇（签证/支付/退改/天气/小费/网络/交通/安全/美食/语言/健康）+ 城市指南 10 篇（北京/西安/上海/成都/桂林/杭州/广州/三亚/重庆/云南）+ 行程规划 1 篇 + 文化礼仪 1 篇
+- **RAG FAQ 工具**：三级查找策略——① RAG 向量语义搜索；② 关键词精确匹配兜底（中英文）；③ 最终兜底提示。向量库未初始化时自动回退到关键词
+- **摄入脚本**：`python scripts/ingest_knowledge.py` 全量导入，`--force` 覆盖已有数据，`--stats` 查看统计+测试检索，支持批量向量化（减少 API 调用）
+
+### 验证结果
+
+- 知识库摄入：30 篇文档在 2.9s 内完成向量化
+- 向量检索测试：签证查询（0.542）、北京景点（0.698）、微信支付（0.571）——语义匹配准确
+- 测试 5（FAQ 查询）：RAG 返回的答案比关键词匹配更详细（含签证材料清单）
+- `python main.py test --quick` → 8 组测试全部通过，Phase 3-6 回归正常
+
 ---
 
 ## 五、操作记录
@@ -316,3 +354,4 @@ main.py                                      ← 更新：12 组测试（含 Pha
 | 2026-07-29 | Phase 4：定制 Agent（需求提取+草案生成）+ 修订循环 + 意向评分 | ✅ |
 | 2026-07-29 | Phase 5：终态写入（operations_sync + CRM/CAPI）+ /chat API 联调，MVP 完成 | ✅ |
 | 2026-07-30 | Phase 6：销售 Agent（报价+意向评分）+ 运营 Agent（入驻+履约+工单），四分支完整版 | ✅ |
+| 2026-07-30 | Phase 7：RAG 增强——百炼 Embedding + 纯 Python 向量存储 + 30 篇知识库文档 | ✅ |

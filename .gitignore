@@ -51,6 +51,7 @@ logs/
 *.sqlite
 *.sqlite3
 checkpoint_data/
+data/
 
 # ---- 测试覆盖率 ----
 .coverage
