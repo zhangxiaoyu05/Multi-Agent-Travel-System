@@ -1,6 +1,6 @@
-"""知识库摄入脚本
+"""知识库摄入脚本——Milvus 向量数据库
 
-将 FAQ 文档和城市指南导入 Chroma 向量数据库。
+将 FAQ 文档和城市指南导入 Milvus 向量数据库。
 首次运行或知识库更新后执行此脚本。
 
 使用方式：
@@ -20,20 +20,32 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from scripts.knowledge_base import FAQ_DOCS, CITY_DOCS
-from services.vector_store import get_vector_store, get_collection_stats
+from services.vector_store import (
+    init_milvus,
+    add_documents,
+    get_collection_stats,
+    search_knowledge,
+)
 
 
 def ingest(force: bool = False):
-    """将知识库文档导入 Chroma
-
-    如果向量库中已有数据且未指定 --force，则跳过导入。
+    """将知识库文档导入 Milvus
 
     Args:
-        force: True = 删除已有数据后重新导入
+        force: True = 先清空已有数据再导入
     """
+    # 初始化连接
+    print("连接 Milvus...")
+    try:
+        init_milvus()
+    except Exception as e:
+        print(f"Milvus 连接失败: {e}")
+        print("请确认 docker-compose 已启动: docker-compose up -d")
+        return
+
     stats_before = get_collection_stats()
-    print(f"知识库当前状态：{stats_before['count']} 篇文档")
-    print(f"存储路径：{stats_before['path']}")
+    print(f"知识库当前状态：{stats_before['count']} 篇文档（backend: {stats_before.get('backend', 'unknown')}）")
+    print(f"Milvus 地址：{stats_before.get('host', 'unknown')}")
     print()
 
     if stats_before["count"] > 0 and not force:
@@ -43,20 +55,7 @@ def ingest(force: bool = False):
     all_docs = FAQ_DOCS + CITY_DOCS
     print(f"准备导入 {len(all_docs)} 篇文档（FAQ: {len(FAQ_DOCS)}, 城市指南: {len(CITY_DOCS)}）")
 
-    if force and stats_before["count"] > 0:
-        print("删除已有数据...")
-        store = get_vector_store()
-        try:
-            # 删除 collection 中所有文档
-            all_ids = store._collection.get()["ids"]
-            if all_ids:
-                store.delete(all_ids)
-            print(f"已删除 {len(all_ids)} 篇旧文档")
-        except Exception as e:
-            print(f"清理旧数据时出错：{e}")
-
     # 分批导入（避免 API 限流）
-    from services.vector_store import add_documents
     batch_size = 10
     total = len(all_docs)
     imported = 0
@@ -75,15 +74,21 @@ def ingest(force: bool = False):
 
     stats_after = get_collection_stats()
     print(f"知识库最新状态：{stats_after['count']} 篇文档")
-    print(f"存储路径：{stats_after['path']}")
 
 
 def show_stats():
     """显示知识库统计信息并做测试检索"""
+    try:
+        init_milvus()
+    except Exception as e:
+        print(f"Milvus 连接失败: {e}")
+        return
+
     stats = get_collection_stats()
     print(f"知识库统计：")
     print(f"  文档总数：{stats['count']}")
-    print(f"  存储路径：{stats['path']}")
+    print(f"  Collection：{stats.get('name', 'N/A')}")
+    print(f"  Backend：{stats.get('backend', 'N/A')}")
     print()
 
     if stats["count"] == 0:
@@ -91,7 +96,6 @@ def show_stats():
         return
 
     # 测试检索
-    from services.vector_store import search_knowledge
     test_queries = [
         "签证需要什么材料？",
         "北京有什么好玩的景点？",

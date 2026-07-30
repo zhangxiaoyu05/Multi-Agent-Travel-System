@@ -1,32 +1,41 @@
-"""LangGraph 图构建——Phase 6
+"""LangGraph 图构建——Phase 7+
 
 组装所有节点和边，编译为可执行的 StateGraph。
 
-完整图结构（Phase 6）：
+Checkpoint 后端：
+    - 生产：MySQLSaver（MySQL 8.0，服务重启不丢失会话）
+    - 开发：MemorySaver（进程内，调试用）
+
+环境变量：
+    CHECKPOINT_BACKEND=mysql（默认）| memory
+
+完整图结构：
     START → input_guard → session_context → intent_router
-                                                   │
-         ┌────────────┰────────────┰───────────────┼──────────────────────────┐
-         ▼            ▼            ▼               ▼                          ▼
+                                                       │
+         ┌────────────┰────────────┰───────────────────┼──────────────────────┐
+         ▼            ▼            ▼                   ▼                      ▼
   customer_service  sales   operations_agent  trip_planner             human_handoff
          │            │            │           │        ▲                       │
          ├─ after_svc ├─ after_sls │           ├─ requirements_complete         │
-         │  ├→ handoff│  ├→ ops_sync│           │   ├─→ intent_scorer           │
-         │  ├→ router │  ├→ handoff│           │   └─→ END                     │
+         │  ├→ handoff│  ├→ ops_sync│           │   ├→ intent_scorer           │
+         │  ├→ router │  ├→ handoff│           │   └→ END                     │
          │  └→ END    │  └→ END    │           │                                │
-         │            │            │           └─→ intent_scorer               │
+         │            │            │           └→ intent_scorer               │
          │            │            │               │                            │
          │            │            │               ├─ revision_decision         │
-         │            │            │               │  ├─→ operations_sync ──┐   │
-         │            │            │               │  ├─→ revision_loop ───┘   │
-         │            │            │               │  └─→ human_handoff ──┐    │
-         │            │            │               │                       │    │
-         └────────────╋────────────╋───────────────┼───────────────────────┼────│
-                      │            │               │                       │    │
-                      │            └───────────────┼───────────────────────┼────│
-                      │                            │                       ▼    ▼
-                      └────────────────────────────┼────────────→ operations_sync → END
+         │            │            │               │  ├→ operations_sync ──┐   │
+         │            │            │               │  ├→ revision_loop ──┘   │
+         │            │            │               │  └→ human_handoff ──┐    │
+         │            │            │               │                      │    │
+         └────────────╋────────────╋───────────────┼──────────────────────┼────│
+                      │            │               │                      │    │
+                      │            └───────────────┼──────────────────────┼────│
+                      │                            │                      ▼    ▼
+                      └────────────────────────────┼──────────→ operations_sync → END
 """
 
+import os
+import logging
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -52,44 +61,39 @@ from graph.conditions.requirements_complete import requirements_complete
 from graph.conditions.revision_decision import revision_decision
 from graph.conditions.after_sales import after_sales
 
+logger = logging.getLogger(__name__)
+
 
 # =============================================================================
 # 图构建函数
 # =============================================================================
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     """构建并编译 LangGraph 图
 
-    图结构（Phase 6——四分支完整版）：
-        START → input_guard → session_context → intent_router
-                                                       │
-        ┌──────────────────┰───────────────────────────┼──────────────────────┐
-        ▼                  ▼                           ▼                      ▼
-        customer_service   sales_agent         trip_planner           human_handoff
-        │                  │                   │        ▲                       │
-        ├─ after_service   ├─ after_sales     ├─ requirements_complete         │
-        │  ├→ handoff      │  ├→ ops_sync     │   ├→ intent_scorer            │
-        │  ├→ router       │  ├→ handoff      │   └→ END                     │
-        │  └→ END          │  └→ END          │                                │
-        │                  │                  └→ intent_scorer               │
-        │                  │                      │                            │
-        │                  │                      ├─ revision_decision         │
-        │                  │                      │  ├→ operations_sync ──┐    │
-        │                  │                      │  ├→ revision_loop ──┘    │
-        │                  │                      │  └→ human_handoff ──┐    │
-        │                  │                      │                      │    │
-        └──────────────────╋──────────────────────┼──────────────────────┼────│
-                           │                      │                      │    │
-                operations_agent                  │                      │    │
-                           │                      │                      ▼    ▼
-                           └──────────────────────┼──────────→ operations_sync → END
-                                                  │
-                                                  └── (handoff 也进 operations_sync)
+    Args:
+        checkpointer: LangGraph CheckpointSaver 实例。
+                      None = 自动选择（MySQL 优先，失败回退 MemorySaver）
 
     Returns:
-        编译后的 StateGraph（含 MemorySaver checkpoint）
+        编译后的 StateGraph
     """
+    # ---- Checkpoint 选择 ----
+    if checkpointer is None:
+        backend = os.getenv("CHECKPOINT_BACKEND", "mysql")
+        if backend == "mysql":
+            try:
+                from services.checkpoint import MySQLSaver
+                checkpointer = MySQLSaver()
+                logger.info("Using MySQLSaver for checkpoint persistence")
+            except Exception as e:
+                logger.warning(f"MySQLSaver not available ({e}), falling back to MemorySaver")
+                checkpointer = MemorySaver()
+        else:
+            logger.info("Using MemorySaver (dev mode)")
+            checkpointer = MemorySaver()
+
     builder = StateGraph(AgentState)
 
     # ====== 注册节点 ======
@@ -97,19 +101,19 @@ def build_graph():
     builder.add_node("session_context", session_context)
     builder.add_node("intent_router", intent_router)
 
-    # Phase 3 节点
+    # Phase 3
     builder.add_node("customer_service", customer_service)
     builder.add_node("human_handoff", human_handoff)
 
-    # Phase 4 节点
+    # Phase 4
     builder.add_node("trip_planner", trip_planner)
     builder.add_node("intent_scorer", intent_scorer)
     builder.add_node("revision_loop", revision_loop)
 
-    # Phase 5 节点：终态数据写入
+    # Phase 5
     builder.add_node("operations_sync", operations_sync)
 
-    # Phase 6 节点：销售 + 运营
+    # Phase 6
     builder.add_node("sales_agent", sales_agent)
     builder.add_node("operations_agent", ops_agent_node)
 
@@ -120,7 +124,7 @@ def build_graph():
     builder.add_edge("input_guard", "session_context")
     builder.add_edge("session_context", "intent_router")
 
-    # 路由分发（四分支 + 人工接管）
+    # 路由分发
     builder.add_conditional_edges(
         "intent_router",
         route_decision,
@@ -133,7 +137,7 @@ def build_graph():
         }
     )
 
-    # ---- 客服分支 ----
+    # 客服分支
     builder.add_conditional_edges(
         "customer_service",
         after_service,
@@ -144,7 +148,7 @@ def build_graph():
         }
     )
 
-    # ---- 销售分支（Phase 6 新增）----
+    # 销售分支
     builder.add_conditional_edges(
         "sales_agent",
         after_sales,
@@ -155,8 +159,7 @@ def build_graph():
         }
     )
 
-    # ---- 运营分支（Phase 6 新增）----
-    # 运营节点执行后 → 如果需要转人工走 handoff，否则走 operations_sync 写入记录 → END
+    # 运营分支
     builder.add_conditional_edges(
         "operations_agent",
         _after_operations,
@@ -166,7 +169,7 @@ def build_graph():
         }
     )
 
-    # ---- 定制分支：必填项检查 ----
+    # 定制分支：必填项检查
     builder.add_conditional_edges(
         "trip_planner",
         requirements_complete,
@@ -176,7 +179,7 @@ def build_graph():
         }
     )
 
-    # ---- 定制分支：修订决策 ----
+    # 定制分支：修订决策
     builder.add_conditional_edges(
         "intent_scorer",
         revision_decision,
@@ -195,31 +198,16 @@ def build_graph():
     builder.add_edge("operations_sync", END)
 
     # ====== 编译 ======
-
-    # 开发期使用内存 checkpoint（生产环境切 PostgresSaver）
-    memory = MemorySaver()
-    compiled_graph = builder.compile(checkpointer=memory)
-
+    compiled_graph = builder.compile(checkpointer=checkpointer)
     return compiled_graph
 
 
 # =============================================================================
-# 运营分支条件边（简单逻辑，放在 builder.py 内联）
+# 运营分支条件边
 # =============================================================================
 
 def _after_operations(state: AgentState) -> str:
-    """运营节点出口条件
-
-    决策优先级：
-    1. 需要转人工 → human_handoff
-    2. 其他 → operations_sync（写入 CRM 记录后结束）
-
-    Args:
-        state: 当前 AgentState
-
-    Returns:
-        目标节点名称：'human_handoff' / 'operations_sync'
-    """
+    """运营节点出口条件"""
     if state.get("need_human"):
         return "human_handoff"
     return "operations_sync"

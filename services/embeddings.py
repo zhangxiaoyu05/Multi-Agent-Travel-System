@@ -1,6 +1,7 @@
 """Embedding 工厂——阿里百炼 DashScope 原生 API
 
 直接调用 DashScope text-embedding API，避免 OpenAI 兼容模式的不兼容问题。
+使用 text-embedding-v4 模型。
 
 使用方式：
     from services.embeddings import embed_text, embed_texts
@@ -20,6 +21,7 @@ _DASHSCOPE_EMBED_URL = (
 
 # 模块级缓存
 _api_key: str | None = None
+_default_model: str | None = None
 
 
 def _get_api_key() -> str:
@@ -32,18 +34,26 @@ def _get_api_key() -> str:
     return _api_key
 
 
+def _get_default_model() -> str:
+    """获取默认 Embedding 模型名"""
+    global _default_model
+    if _default_model is None:
+        _default_model = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
+    return _default_model
+
+
 def embed_text(text: str, model: str | None = None) -> list[float]:
     """将单个文本转换为向量
 
     Args:
         text: 待向量化的文本
-        model: 模型名（默认 EMBEDDING_MODEL 环境变量或 text-embedding-v2）
+        model: 模型名（默认 text-embedding-v4）
 
     Returns:
-        向量（float 列表，通常 1536 或 1024 维）
+        向量（float 列表，维度由模型决定，v4 为 1024 维）
     """
     if model is None:
-        model = os.getenv("EMBEDDING_MODEL", "text-embedding-v2")
+        model = _get_default_model()
 
     api_key = _get_api_key()
 
@@ -72,13 +82,13 @@ def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]
 
     Args:
         texts: 待向量化的文本列表
-        model: 模型名
+        model: 模型名（默认 text-embedding-v4）
 
     Returns:
         向量列表
     """
     if model is None:
-        model = os.getenv("EMBEDDING_MODEL", "text-embedding-v2")
+        model = _get_default_model()
 
     if not texts:
         return []
@@ -103,3 +113,12 @@ def embed_texts(texts: list[str], model: str | None = None) -> list[list[float]]
         return [item["embedding"] for item in data["output"]["embeddings"]]
     except Exception as e:
         raise RuntimeError(f"Batch embedding API error: {e}")
+
+
+def get_embedding_dim() -> int:
+    """获取当前 Embedding 模型的向量维度
+
+    Returns:
+        向量维度（默认 1024，对应 text-embedding-v4）
+    """
+    return int(os.getenv("EMBEDDING_DIM", "1024"))

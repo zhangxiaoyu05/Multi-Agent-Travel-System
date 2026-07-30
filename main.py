@@ -3,6 +3,18 @@
 用法：
     python main.py           # 启动 FastAPI 服务（http://localhost:8000）
     python main.py test      # 命令行快速测试 LangGraph 图
+
+Docker 部署：
+    docker-compose up --build -d
+
+技术栈：
+    - 编排: LangGraph + LangChain
+    - 后端: FastAPI + Uvicorn
+    - LLM: 阿里百炼（路由 qwen-turbo + 生成 qwen3-max）
+    - Embedding: text-embedding-v4
+    - 向量库: Milvus 单机版
+    - 数据库: MySQL 8.0（会话 + Checkpoint）
+    - 缓存: Redis 7（会话历史 + 摘要）
 """
 
 import sys
@@ -27,14 +39,14 @@ def safe_print(*args, **kwargs):
 
 
 def test_graph(quick: bool = False):
-    """命令行快速测试 LangGraph 图——Phase 6
+    """命令行快速测试 LangGraph 图——Phase 7+
 
     发送多条测试消息，验证：
     - 意图路由 + 客服 FAQ + 投诉转人工（Phase 3 回归）
     - 定制需求提取 + 必填项检查 + 追问
     - 完整信息 → 工具调用 + 行程草案生成
     - 意向评分 + 修订循环
-    - checkpoint 持久化（多轮需求收集）
+    - checkpoint 持久化（MySQL / MemorySaver）
     - 终态写入（operations_sync 节点）
     - 销售询价 + 报价生成 + 意向评估（Phase 6）
     - 运营工单 + CRM 写入（Phase 6）
@@ -49,7 +61,7 @@ def test_graph(quick: bool = False):
 
     safe_print("=" * 60)
     mode_label = "Quick" if quick else "Full"
-    safe_print(f"LangGraph Graph Test —— Phase 6 ({mode_label})")
+    safe_print(f"LangGraph Graph Test —— Production ({mode_label})")
     safe_print("=" * 60)
 
     graph = build_graph()

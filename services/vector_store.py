@@ -1,189 +1,290 @@
-"""轻量向量存储——JSON 持久化 + 百炼 Embedding
+"""Milvus 向量存储——语义检索后端
 
-纯 Python 实现，零额外依赖（仅使用 Python 标准库 + 已有的 langchain-openai）。
-使用百炼 Embedding API 做向量化，本地 JSON 文件持久化。
+基于 Milvus 单机部署的向量检索服务，替代旧版 JSON+余弦相似度方案。
+使用 pymilvus SDK 直连，零 LangChain 包装依赖。
 
 使用方式：
-    from services.vector_store import get_vector_store, search_knowledge
+    from services.vector_store import search_knowledge, add_documents, get_collection_stats
 
-    store = get_vector_store()       # 懒加载，首次自动初始化
     results = search_knowledge("签证需要什么材料？", top_k=3)
+    n = add_documents([{"content": "...", "metadata": {...}}, ...])
 """
 
 import os
-import json
-import math
-from services.embeddings import embed_text, embed_texts
+import logging
+from pymilvus import (
+    connections,
+    Collection,
+    FieldSchema,
+    CollectionSchema,
+    DataType,
+    utility,
+)
+from services.embeddings import embed_text, embed_texts, get_embedding_dim
 
-# 向量数据库持久化路径
-_VECTOR_DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-_VECTOR_FILE = os.path.join(_VECTOR_DB_DIR, "vector_store.json")
+logger = logging.getLogger(__name__)
 
-# 模块级缓存
-_store: dict | None = None  # {"documents": [...], "embeddings": [...]}
+# =============================================================================
+# 配置
+# =============================================================================
 
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """纯 Python 余弦相似度计算
-
-    Args:
-        a: 向量 A
-        b: 向量 B
-
-    Returns:
-        余弦相似度 (0.0-1.0)
-    """
-    dot_product = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-
-    return dot_product / (norm_a * norm_b)
+_COLLECTION_NAME: str | None = None
+_COLLECTION: Collection | None = None
+_initialized: bool = False
 
 
-def get_vector_store() -> dict:
-    """获取向量存储实例（懒加载，从 JSON 文件读取）
+def _get_config():
+    """获取 Milvus 配置"""
+    return {
+        "host": os.getenv("MILVUS_HOST", "milvus-standalone"),
+        "port": os.getenv("MILVUS_PORT", "19530"),
+        "collection": os.getenv("MILVUS_COLLECTION", "travel_knowledge"),
+    }
 
-    Returns:
-        {"documents": [...], "embeddings": [...]}
-    """
-    global _store
-    if _store is None:
-        os.makedirs(_VECTOR_DB_DIR, exist_ok=True)
-        if os.path.exists(_VECTOR_FILE):
-            try:
-                with open(_VECTOR_FILE, "r", encoding="utf-8") as f:
-                    _store = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                _store = {"documents": [], "embeddings": []}
+
+# =============================================================================
+# 连接管理
+# =============================================================================
+
+
+def init_milvus():
+    """初始化 Milvus 连接 + 确保 Collection 存在（同步，应用启动时调用一次）"""
+    global _COLLECTION, _COLLECTION_NAME, _initialized
+
+    config = _get_config()
+    _COLLECTION_NAME = config["collection"]
+    dim = get_embedding_dim()
+
+    logger.info(f"Connecting to Milvus at {config['host']}:{config['port']}")
+
+    try:
+        # 断开已有连接（如有）
+        if connections.has_connection("default"):
+            connections.disconnect("default")
+
+        connections.connect(
+            alias="default",
+            host=config["host"],
+            port=config["port"],
+            timeout=10,
+        )
+        logger.info("Milvus connection established")
+
+        # 确保 Collection 存在
+        if utility.has_collection(_COLLECTION_NAME):
+            _COLLECTION = Collection(_COLLECTION_NAME)
+            _COLLECTION.load()
+            logger.info(f"Collection '{_COLLECTION_NAME}' loaded (dim={dim}, count={_COLLECTION.num_entities})")
         else:
-            _store = {"documents": [], "embeddings": []}
-    return _store
+            _COLLECTION = _create_collection(dim)
+            logger.info(f"Collection '{_COLLECTION_NAME}' created (dim={dim})")
+
+        _initialized = True
+
+    except Exception as e:
+        logger.warning(f"Milvus connection failed (will retry on first use): {e}")
+        _initialized = False
 
 
-def _save_store():
-    """持久化向量存储到 JSON 文件"""
-    global _store
-    if _store is not None:
-        os.makedirs(_VECTOR_DB_DIR, exist_ok=True)
-        with open(_VECTOR_FILE, "w", encoding="utf-8") as f:
-            json.dump(_store, f, ensure_ascii=False, indent=2)
+def _create_collection(dim: int) -> Collection:
+    """创建知识库 Collection
+
+    Schema:
+        id: int64 (主键, 自增)
+        content: varchar (文档内容, 最大 65535 字符)
+        embedding: float_vector (向量, 维度由 embedding 模型决定)
+        category: varchar (分类标签)
+        tags: varchar (标签, 逗号分隔)
+    """
+    config = _get_config()
+
+    fields = [
+        FieldSchema(name="id", dtype=DataType.INT64, is_primary=True, auto_id=True),
+        FieldSchema(name="content", dtype=DataType.VARCHAR, max_length=65535),
+        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=dim),
+        FieldSchema(name="category", dtype=DataType.VARCHAR, max_length=128),
+        FieldSchema(name="tags", dtype=DataType.VARCHAR, max_length=512),
+    ]
+
+    schema = CollectionSchema(
+        fields=fields,
+        description="入境定制游知识库——FAQ + 城市指南",
+        enable_dynamic_field=False,
+    )
+
+    collection = Collection(name=config["collection"], schema=schema)
+
+    # 创建索引：HNSW（高召回、适合中小规模）
+    index_params = {
+        "metric_type": "COSINE",
+        "index_type": "HNSW",
+        "params": {"M": 16, "efConstruction": 200},
+    }
+    collection.create_index(field_name="embedding", index_params=index_params)
+    collection.load()
+
+    return collection
+
+
+def close_milvus():
+    """断开 Milvus 连接（应用关闭时调用）"""
+    global _COLLECTION, _initialized
+    try:
+        if connections.has_connection("default"):
+            connections.disconnect("default")
+        _COLLECTION = None
+        _initialized = False
+        logger.info("Milvus connection closed")
+    except Exception:
+        pass
+
+
+def _get_collection() -> Collection:
+    """获取 Collection 实例（自动重连）"""
+    global _COLLECTION, _initialized
+    if not _initialized or _COLLECTION is None:
+        init_milvus()
+    if _COLLECTION is None:
+        raise RuntimeError("Milvus not available. Check Milvus connection settings.")
+    return _COLLECTION
+
+
+# =============================================================================
+# 检索 API
+# =============================================================================
 
 
 def search_knowledge(query: str, top_k: int = 3, score_threshold: float = 0.3) -> list[dict]:
-    """在知识库中检索与 query 最相关的文档
+    """语义检索知识库
 
     流程：
-    1. 用百炼 Embedding 向量化查询文本
-    2. 与知识库中所有文档向量计算余弦相似度
-    3. 排序返回 top_k 个结果
+    1. 用 text-embedding-v4 向量化查询
+    2. Milvus HNSW 索引检索 top_k 个最相似文档
+    3. 过滤低于阈值的低分结果
 
     Args:
         query: 用户问题文本
         top_k: 返回文档数量
-        score_threshold: 最低相似度阈值（低于此值的文档不返回）
+        score_threshold: 最低相似度阈值（COSINE 距离, 0.3 ≈ 相关性很低）
 
     Returns:
         [{"content": "文档内容", "score": 0.85, "metadata": {...}}, ...]
     """
-    store = get_vector_store()
-    documents = store.get("documents", [])
-    embeddings = store.get("embeddings", [])
-
-    if not documents:
-        return []
-
     try:
-        # Step 1: 向量化查询
+        collection = _get_collection()
         query_vector = embed_text(query)
 
-        # Step 2: 计算所有文档的余弦相似度
-        scores = []
-        for i, doc_vec in enumerate(embeddings):
-            score = _cosine_similarity(query_vector, doc_vec)
+        search_params = {"metric_type": "COSINE", "params": {"ef": 64}}
+        results = collection.search(
+            data=[query_vector],
+            anns_field="embedding",
+            param=search_params,
+            limit=top_k * 2,  # 请求 2x 以便过滤后仍有足够结果
+            output_fields=["content", "category", "tags"],
+        )
+
+        hits = []
+        for result in results[0]:
+            score = result.distance  # COSINE 相似度 [0, 1]
             if score >= score_threshold:
-                scores.append((i, score))
+                entity = result.entity
+                hits.append({
+                    "content": entity.get("content", ""),
+                    "score": round(score, 4),
+                    "metadata": {
+                        "category": entity.get("category", ""),
+                        "tags": entity.get("tags", ""),
+                    },
+                })
 
-        # Step 3: 排序取 top-k
-        scores.sort(key=lambda x: x[1], reverse=True)
-        top_results = scores[:top_k]
-
-        # Step 4: 构建结果
-        results = []
-        for idx, score in top_results:
-            doc = documents[idx]
-            results.append({
-                "content": doc.get("content", ""),
-                "score": round(score, 4),
-                "metadata": doc.get("metadata", {}),
-            })
-
-        return results
+        return hits[:top_k]
 
     except Exception as e:
-        print(f"[RAG] Vector search error: {e}")
+        logger.error(f"Milvus search error: {e}")
         return []
+
+
+# =============================================================================
+# 写入 API
+# =============================================================================
 
 
 def add_documents(docs: list[dict]) -> int:
-    """向知识库添加文档（自动向量化 + 持久化）
+    """向知识库批量添加文档（自动向量化）
 
     Args:
-        docs: [{"content": "文档内容", "metadata": {"category": "签证", ...}}, ...]
+        docs: [{"content": "文档内容", "metadata": {"category": "签证", "tags": "..."}}, ...]
 
     Returns:
-        成功添加的文档数量
+        成功添加的文档数
     """
-    store = get_vector_store()
-    documents = store.get("documents", [])
-    embeddings = store.get("embeddings", [])
-
     if not docs:
         return 0
 
     try:
-        # 批量向量化（比逐条调用快）
-        contents = [d["content"] for d in docs if d.get("content")]
+        collection = _get_collection()
+
+        # 批量向量化
+        contents = [d.get("content", "") for d in docs if d.get("content")]
         if not contents:
             return 0
 
         vectors = embed_texts(contents)
-        added = 0
 
-        for doc in docs:
+        # 准备插入数据
+        insert_contents = []
+        insert_vectors = []
+        insert_categories = []
+        insert_tags = []
+
+        for i, doc in enumerate(docs):
             content = doc.get("content", "")
-            if not content:
+            if not content or i >= len(vectors):
                 continue
+            meta = doc.get("metadata", {})
+            insert_contents.append(content)
+            insert_vectors.append(vectors[i])
+            insert_categories.append(str(meta.get("category", ""))[:128])
+            insert_tags.append(str(meta.get("tags", ""))[:512])
 
-            # 获取对应的向量
-            vector = vectors[added] if added < len(vectors) else embed_text(content)
+        if not insert_contents:
+            return 0
 
-            # 存储
-            documents.append({"content": content, "metadata": doc.get("metadata", {})})
-            embeddings.append(vector)
-            added += 1
+        # 批量插入
+        collection.insert([insert_contents, insert_vectors, insert_categories, insert_tags])
+        collection.flush()
 
-        store["documents"] = documents
-        store["embeddings"] = embeddings
-        _save_store()
-
-        return added
+        return len(insert_contents)
 
     except Exception as e:
-        print(f"[RAG] Add documents error: {e}")
+        logger.error(f"Milvus add_documents error: {e}")
         return 0
+
+
+# =============================================================================
+# 统计 API
+# =============================================================================
 
 
 def get_collection_stats() -> dict:
     """获取知识库统计信息
 
     Returns:
-        {"count": 文档总数, "path": 存储路径}
+        {"count": 文档数, "name": Collection 名称, "host": Milvus 地址}
     """
-    store = get_vector_store()
-    return {
-        "count": len(store.get("documents", [])),
-        "path": _VECTOR_FILE,
-    }
+    config = _get_config()
+    try:
+        collection = _get_collection()
+        return {
+            "count": collection.num_entities,
+            "name": config["collection"],
+            "host": f"{config['host']}:{config['port']}",
+            "backend": "Milvus",
+        }
+    except Exception:
+        return {
+            "count": 0,
+            "name": config["collection"],
+            "host": f"{config['host']}:{config['port']}",
+            "backend": "Milvus (disconnected)",
+        }

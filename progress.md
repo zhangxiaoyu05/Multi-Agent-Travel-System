@@ -17,8 +17,13 @@
 | 编排引擎 | LangGraph ≥ 0.2 | 图结构、State 管理、Checkpoint |
 | Agent 框架 | LangChain ≥ 0.3 | Agent 抽象、Tool 封装 |
 | Web 框架 | FastAPI ≥ 0.115 | /chat 接口 |
-| LLM | 阿里百炼 | qwen-turbo（路由）+ qwen-plus（生成） |
-| 容器化 | Docker + docker-compose | 开发/生产一致 |
+| LLM 路由 | 百炼 qwen-turbo | 意图识别（快速、低成本） |
+| LLM 生成 | 百炼 qwen3-max | 行程生成、客服回复（强推理） |
+| Embedding | 百炼 text-embedding-v4 | 1024 维向量 |
+| 向量数据库 | Milvus 2.4 单机 | HNSW 索引 + COSINE 相似度 |
+| 关系数据库 | MySQL 8.0 | 会话存储 + LangGraph Checkpoint |
+| 缓存 | Redis 7 | 会话历史 + 摘要缓存 |
+| 容器化 | Docker + docker-compose | 6 个服务一键部署 |
 | Python | 3.12 | — |
 
 ### 关键文档
@@ -248,10 +253,10 @@ Phase 5  ██████████  ✅ 终态写入 + /chat API 联调    
 ────────── MVP 完成线 ─────────────────────────────────────
 Phase 6  ██████████  ✅ 销售 Agent + 运营 Agent         2026-07-30 完成
 Phase 7  ██████████  ✅ RAG 增强（真实向量检索）         2026-07-30 完成
-Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
+Phase 8  ██████████  ✅ 基础设施升级（Milvus+MySQL+Redis）  2026-07-30 完成
 ```
 
-### 下一步：Phase 6 ✅ 已完成
+### 下一步：持续优化
 
 **完成时间**：2026-07-30
 
@@ -336,6 +341,95 @@ requirements.txt                             ← 更新：移除 chromadb（零�
 
 ---
 
+### Phase 8 ✅ 基础设施升级（2026-07-30）
+
+模型升级 + 真实基础设施 + Docker 全容器化。
+
+#### 变更摘要
+
+1. **LLM 升级**：生成模型 qwen-plus → **qwen3-max**，Embedding v2 → **text-embedding-v4**（1024 维）
+2. **向量数据库**：纯 Python JSON+余弦相似度 → **Milvus 2.4 单机**（HNSW 索引）
+3. **关系数据库**：引入 **MySQL 8.0**（SQLAlchemy async + aiomysql），用于会话存储 + 自定义 LangGraph Checkpoint Saver
+4. **缓存**：引入 **Redis 7**（会话历史 + 摘要缓存）
+5. **Docker 全容器化**：docker-compose 从 1 个服务扩展到 **6 个服务**（app + mysql + redis + etcd + minio + milvus）
+6. **前端目录**：`static/` → `frontend/`
+7. **依赖清理**：删除未使用的依赖，添加 pymilvus / sqlalchemy / aiomysql / redis
+
+#### 新增文件
+
+```
+services/
+├── mysql.py                  ← SQLAlchemy async 连接池 + session 管理
+├── redis.py                  ← Redis 异步客户端 + 缓存工具（session history / summary）
+├── checkpoint.py             ← MySQL Checkpoint Saver（LangGraph 持久化，替代 MemorySaver）
+scripts/
+└── migrate_mysql.sql         ← MySQL 初始化 DDL（checkpoints + checkpoint_writes + sessions）
+```
+
+#### 重写文件
+
+```
+services/
+├── llm.py                    ← 模型改为 qwen3-max
+├── embeddings.py             ← 模型改为 text-embedding-v4，新增 get_embedding_dim()
+├── vector_store.py           ← 完全重写：Milvus + HNSW + pymilvus SDK，替代旧 JSON store
+tools/
+└── rag_faq.py                ← 适配 Milvus API，保留关键词兜底
+scripts/
+└── ingest_knowledge.py       ← 适配 Milvus add_documents()
+graph/
+└── builder.py                ← MySQLSaver 自动选择（mysql/memory 环境变量切换）
+api/
+└── main.py                   ← lifespan 生命周期（MySQL/Redis/Milvus 初始化 + 表创建）
+                                + health 返回组件状态 + static→frontend 路径更新
+```
+
+#### 配置文件更新
+
+```
+requirements.txt              ← 新增 pymilvus / sqlalchemy / aiomysql / redis
+.env.example                  ← 新增 MYSQL_/REDIS_/MILVUS_ 配置段 + 模型更新
+Dockerfile                    ← 添加 HEALTHCHECK
+docker-compose.yml            ← 从 1 服务扩展到 6 服务（app/mysql/redis/etcd/minio/milvus）
+.gitignore                    ← 添加 Docker 数据卷忽略
+```
+
+#### 删除文件
+
+```
+tools/mock_faq.py             ← 旧版关键词 FAQ（已被 rag_faq.py 替代）
+```
+
+#### Docker Compose 服务
+
+| 服务 | 镜像 | 端口 | 用途 |
+|------|------|:---:|------|
+| app | python:3.12-slim | 8000 | FastAPI 后端 |
+| mysql | mysql:8.0 | 3306 | 会话 + Checkpoint |
+| redis | redis:7-alpine | 6379 | 缓存 |
+| etcd | quay.io/coreos/etcd:v3.5.5 | 2379 | Milvus 元数据 |
+| minio | minio/minio | 9000/9001 | Milvus 对象存储 |
+| milvus-standalone | milvusdb/milvus:v2.4.0 | 19530 | 向量检索 |
+
+#### 异地部署
+
+```bash
+# 1. 复制项目到目标服务器
+scp -r Multi_Agent user@server:/opt/
+
+# 2. 配置环境
+cp .env.example .env
+vim .env  # 填入 LLM_API_KEY
+
+# 3. 启动
+docker-compose up --build -d
+
+# 4. 导入知识库
+docker-compose exec app python scripts/ingest_knowledge.py
+```
+
+---
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -355,3 +449,4 @@ requirements.txt                             ← 更新：移除 chromadb（零�
 | 2026-07-29 | Phase 5：终态写入（operations_sync + CRM/CAPI）+ /chat API 联调，MVP 完成 | ✅ |
 | 2026-07-30 | Phase 6：销售 Agent（报价+意向评分）+ 运营 Agent（入驻+履约+工单），四分支完整版 | ✅ |
 | 2026-07-30 | Phase 7：RAG 增强——百炼 Embedding + 纯 Python 向量存储 + 30 篇知识库文档 | ✅ |
+| 2026-07-30 | Phase 8：基础设施升级——模型升级 qwen3-max + embedding-v4，Milvus 向量库，MySQL 8.0 + Redis 7，Docker 全容器化（6 服务），MySQL Checkpoint Saver，static→frontend 重命名 | ✅ |
