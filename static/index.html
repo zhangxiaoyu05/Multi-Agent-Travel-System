@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>入境定制游 · AI 多 Agent 系统</title>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --surface: #ffffff;
+    --border: #e4e7ed;
+    --text: #303133;
+    --text-secondary: #909399;
+    --text-muted: #c0c4cc;
+    --primary: #409eff;
+    --primary-light: #ecf5ff;
+    --success: #67c23a;
+    --warning: #e6a23c;
+    --danger: #f56c6c;
+    --info: #909399;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 2px 12px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ====== Header ====== */
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    z-index: 10;
+  }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .logo { font-size: 22px; }
+  .title { font-size: 16px; font-weight: 600; }
+  .subtitle { font-size: 12px; color: var(--text-secondary); }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    background: var(--success); animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .status-text { font-size: 12px; color: var(--text-secondary); }
+
+  /* ====== Main Layout ====== */
+  .main {
+    flex: 1; display: flex; overflow: hidden;
+  }
+
+  /* ====== Sidebar ====== */
+  .sidebar {
+    width: 320px; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 16px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar-body { flex: 1; overflow-y: auto; padding: 16px; }
+
+  .form-group { margin-bottom: 14px; }
+  .form-label {
+    display: block; font-size: 12px; color: var(--text-secondary);
+    margin-bottom: 4px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .form-input, .form-select {
+    width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); font-size: 13px; outline: none;
+    transition: border-color 0.2s; font-family: inherit;
+  }
+  .form-input:focus, .form-select:focus { border-color: var(--primary); }
+  .form-row { display: flex; gap: 8px; }
+  .form-row > * { flex: 1; }
+
+  .btn {
+    padding: 8px 16px; border: none; border-radius: var(--radius-sm);
+    font-size: 13px; cursor: pointer; font-weight: 500; transition: all 0.2s;
+    display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
+  }
+  .btn-primary { background: var(--primary); color: #fff; width: 100%; justify-content: center; }
+  .btn-primary:hover { background: #3a8ee6; }
+  .btn-primary:disabled { background: #a0cfff; cursor: not-allowed; }
+  .btn-text { background: transparent; color: var(--primary); padding: 4px 8px; }
+  .btn-text:hover { background: var(--primary-light); }
+  .btn-sm { font-size: 11px; padding: 4px 10px; }
+
+  .quick-prompts { margin-top: 16px; }
+  .quick-prompts-title { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .quick-prompt {
+    display: block; width: 100%; text-align: left; padding: 8px 10px;
+    background: #f5f7fa; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    font-size: 12px; cursor: pointer; margin-bottom: 6px; transition: all 0.15s;
+    color: var(--text); font-family: inherit;
+  }
+  .quick-prompt:hover { background: var(--primary-light); border-color: var(--primary); }
+
+  /* ====== Chat Area ====== */
+  .chat-area {
+    flex: 1; display: flex; flex-direction: column; background: var(--bg);
+  }
+  .chat-messages {
+    flex: 1; overflow-y: auto; padding: 20px 24px;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  .chat-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; color: var(--text-muted); gap: 12px;
+  }
+  .chat-empty-icon { font-size: 48px; opacity: 0.5; }
+
+  /* Messages */
+  .msg { display: flex; gap: 10px; max-width: 85%; animation: slideIn 0.25s ease-out; }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.agent { align-self: flex-start; }
+
+  .msg-avatar {
+    width: 36px; height: 36px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;
+  }
+  .msg.user .msg-avatar { background: var(--primary); color: #fff; }
+  .msg.agent .msg-avatar { background: #e6f7ff; color: var(--primary); }
+
+  .msg-bubble {
+    padding: 12px 16px; border-radius: var(--radius); line-height: 1.6;
+    font-size: 14px; word-break: break-word;
+  }
+  .msg.user .msg-bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.agent .msg-bubble { background: var(--surface); color: var(--text); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
+
+  .msg-meta { display: flex; gap: 8px; align-items: center; margin-top: 6px; font-size: 11px; }
+  .msg.user .msg-meta { justify-content: flex-end; }
+  .msg.agent .msg-meta { padding-left: 46px; }
+
+  /* Branch Badge */
+  .branch-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;
+  }
+  .branch-customer_service { background: #e6f7ff; color: #1890ff; }
+  .branch-sales_agent { background: #fff7e6; color: #fa8c16; }
+  .branch-operations_agent { background: #f6ffed; color: #52c41a; }
+  .branch-trip_planner { background: #f9f0ff; color: #722ed1; }
+  .branch-human_handoff { background: #fff1f0; color: #f5222d; }
+
+  /* Intent scores */
+  .intent-scores { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .intent-item { text-align: center; }
+  .intent-ring {
+    width: 48px; height: 48px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; position: relative;
+  }
+  .intent-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+
+  /* Draft card */
+  .draft-card {
+    margin-top: 10px; background: #fafbfc; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: 14px; font-size: 13px;
+  }
+  .draft-card h4 { font-size: 13px; margin-bottom: 8px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+  .draft-content { max-height: 260px; overflow-y: auto; line-height: 1.7; }
+  .draft-content h1, .draft-content h2, .draft-content h3 { margin: 8px 0 4px; font-size: 15px; }
+  .draft-content ul, .draft-content ol { padding-left: 18px; }
+  .draft-content p { margin: 4px 0; }
+  .draft-footer { display: flex; gap: 16px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
+
+  /* Loading */
+  .msg.loading .msg-bubble {
+    background: var(--surface); display: flex; gap: 6px; align-items: center;
+  }
+  .dot-flash { display: flex; gap: 4px; padding: 4px 0; }
+  .dot-flash span {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+    animation: dotBounce 1.4s infinite both;
+  }
+  .dot-flash span:nth-child(2) { animation-delay: 0.2s; }
+  .dot-flash span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dotBounce { 0%,80%,100%{transform:scale(0.6)} 40%{transform:scale(1)} }
+
+  /* ====== Chat Input ====== */
+  .chat-input-area {
+    padding: 16px 24px; background: var(--surface); border-top: 1px solid var(--border);
+  }
+  .chat-input-row { display: flex; gap: 10px; align-items: flex-end; }
+  .chat-input {
+    flex: 1; padding: 10px 16px; border: 1px solid var(--border);
+    border-radius: 24px; font-size: 14px; outline: none; resize: none;
+    font-family: inherit; line-height: 1.5; max-height: 120px; min-height: 42px;
+    transition: border-color 0.2s;
+  }
+  .chat-input:focus { border-color: var(--primary); }
+  .btn-send {
+    width: 42px; height: 42px; border-radius: 50%; border: none;
+    background: var(--primary); color: #fff; cursor: pointer; font-size: 18px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    transition: all 0.2s;
+  }
+  .btn-send:hover { background: #3a8ee6; transform: scale(1.05); }
+  .btn-send:disabled { background: #a0cfff; cursor: not-allowed; transform: none; }
+
+  /* Need Human Banner */
+  .human-alert {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #fff2f0; border: 1px solid #ffccc7; color: #f5222d;
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;
+  }
+
+  /* Warning toast */
+  .toast {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--danger); color: #fff; padding: 10px 24px;
+    border-radius: 20px; font-size: 13px; z-index: 100; animation: fadeInOut 3s;
+  }
+  @keyframes fadeInOut { 0%{opacity:0;transform:translateX(-50%) translateY(-10px)} 10%{opacity:1;transform:translateX(-50%) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <span class="logo">✈️</span>
+    <div>
+      <div class="title">入境定制游 · AI 多 Agent 系统</div>
+      <div class="subtitle">LangGraph + 阿里百炼 · Phase 7</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="status-dot"></span>
+    <span class="status-text">API 已连接</span>
+    <span style="font-size:11px;color:var(--text-muted);margin-left:4px;" id="apiUrl"></span>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-header">⚙️ 会话配置</div>
+    <div class="sidebar-body">
+      <div class="form-group">
+        <label class="form-label">会话 ID</label>
+        <div class="form-row">
+          <input class="form-input" id="sessionId" value="web-demo" style="flex:2">
+          <button class="btn btn-text btn-sm" onclick="newSession()" style="flex-shrink:0">🔄 新建</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">客户 ID</label>
+        <input class="form-input" id="customerId" value="cust-demo-001">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">渠道</label>
+          <select class="form-select" id="channel">
+            <option value="web">🌐 Web</option>
+            <option value="wechat">💬 微信</option>
+            <option value="whatsapp">📱 WhatsApp</option>
+            <option value="messenger">💭 Messenger</option>
+            <option value="tiktok">🎵 TikTok</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">语言</label>
+          <select class="form-select" id="language">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="clearChat()">🗑️ 清空对话</button>
+
+      <div class="quick-prompts">
+        <div class="quick-prompts-title">⚡ 快速测试</div>
+
+        <!-- Travel Planning -->
+        <button class="quick-prompt" onclick="sendQuick('我想去西安玩4天，8月15号到，2个人，预算每人1500美元，喜欢历史文化，轻松节奏')">
+          🗺️ 行程定制 · 西安4天历史文化
+        </button>
+        <button class="quick-prompt" onclick="sendQuick('我想去成都玩5天，2个人，喜欢美食，预算每人800美元')">
+          🍜 行程定制 · 成都美食之旅
+        </button>
+        <button class="quick-prompt" onclick="sendQuick('能不能多加点美食推荐的环节？')">
+          ✏️ 行程修订 · 追加美食
+        </button>
+
+        <!-- Sales -->
+        <button class="quick-prompt" onclick="sendQuick('我想去三亚玩5天，2个人，每人预算2000美元，能给我报个价吗？')">
+          💰 销售询价 · 三亚5天
+        </button>
+        <button class="quick-prompt" onclick="sendQuick('这个报价不错，我要预订，怎么支付？')">
+          🎯 高意向购买 · 确认预订
+        </button>
+
+        <!-- Customer Service -->
+        <button class="quick-prompt" onclick="sendQuick('签证需要什么材料？')">
+          📋 FAQ · 签证材料
+        </button>
+        <button class="quick-prompt" onclick="sendQuick('8月份去西安天气怎么样，需要注意什么？')">
+          🌤️ FAQ · 天气查询
+        </button>
+        <button class="quick-prompt" onclick="sendQuick('我要投诉，导游完全不专业！')">
+          🚨 投诉转人工
+        </button>
+
+        <!-- Operations -->
+        <button class="quick-prompt" onclick="sendQuick('我是旅行社的，想在你们平台上架产品，需要什么资质？')">
+          🏢 运营 · 商家入驻
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat Area -->
+  <div class="chat-area">
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-empty">
+        <div class="chat-empty-icon">💬</div>
+        <div style="font-size:15px;font-weight:500;">开始对话</div>
+        <div style="font-size:13px;">选择左侧快捷提示或输入你的问题</div>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="messageInput"
+          placeholder="输入你的问题，例如：我想去西安玩3天..."
+          rows="1"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"></textarea>
+        <button class="btn-send" onclick="sendMessage()" id="sendBtn">▶</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = 'http://localhost:8000';
+document.getElementById('apiUrl').textContent = API_BASE;
+
+// ====== Helpers ======
+function uid() { return 'sess-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); }
+function newSession() { document.getElementById('sessionId').value = uid(); }
+
+function getConfig() {
+  return {
+    session_id: document.getElementById('sessionId').value,
+    customer_id: document.getElementById('customerId').value,
+    channel: document.getElementById('channel').value,
+    language: document.getElementById('language').value,
+  };
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Simple Markdown → HTML (handles bold, italic, headers, lists, links)
+function simpleMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // ### headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Unordered list items
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+  // Numbered list items
+  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  // Line breaks
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+  // Clean empty paragraphs
+  html = html.replace(/<p><\/p>/g, '');
+  return html;
+}
+
+// ====== Render ======
+function getBranchBadgeClass(branch) {
+  const map = {
+    'customer_service': 'branch-customer_service',
+    'sales_agent': 'branch-sales_agent',
+    'operations_agent': 'branch-operations_agent',
+    'trip_planner': 'branch-trip_planner',
+    'planner': 'branch-trip_planner',
+    'human_handoff': 'branch-human_handoff',
+  };
+  return map[branch] || '';
+}
+
+function getBranchLabel(branch) {
+  const map = {
+    'customer_service': '🤖 客服 Agent',
+    'sales_agent': '💰 销售 Agent',
+    'operations_agent': '📋 运营 Agent',
+    'trip_planner': '🗺️ 定制 Agent',
+    'planner': '🗺️ 定制 Agent',
+    'human_handoff': '🙋 人工接管',
+  };
+  return map[branch] || branch || '';
+}
+
+function renderIntentScores(scores) {
+  if (!scores || Object.keys(scores).length === 0) return '';
+  const labels = {
+    'service': '客服', 'sales': '销售', 'operations': '运营', 'planner': '定制'
+  };
+  const colors = {
+    'service': '#1890ff', 'sales': '#fa8c16', 'operations': '#52c41a', 'planner': '#722ed1'
+  };
+  let html = '<div class="intent-scores">';
+  for (const [key, score] of Object.entries(scores)) {
+    const pct = Math.round(score * 100);
+    const color = colors[key] || '#909399';
+    const label = labels[key] || key;
+    const angle = score * 360;
+    html += `<div class="intent-item">
+      <div class="intent-ring" style="background: conic-gradient(${color} ${angle}deg, #f0f0f0 ${angle}deg);">
+        <span style="position:absolute;width:38px;height:38px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;">${pct}%</span>
+      </div>
+      <div class="intent-label">${label}</div>
+    </div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderMessage(data) {
+  const container = document.getElementById('chatMessages');
+  // Remove empty state
+  const empty = container.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
+  // Remove loading indicator
+  const loading = container.querySelector('.msg.loading');
+  if (loading) loading.remove();
+
+  const isUser = data.role === 'user';
+  const div = document.createElement('div');
+  div.className = `msg ${isUser ? 'user' : 'agent'}`;
+
+  if (isUser) {
+    div.innerHTML = `
+      <div class="msg-avatar">👤</div>
+      <div>
+        <div class="msg-bubble">${escapeHtml(data.content)}</div>
+      </div>`;
+  } else {
+    // Build agent message with all metadata
+    let metaHtml = '';
+    if (data.branch) {
+      metaHtml += `<span class="branch-badge ${getBranchBadgeClass(data.branch)}">${getBranchLabel(data.branch)}</span>`;
+    }
+    if (data.needHuman) {
+      metaHtml += `<span class="human-alert">⚠️ 已转人工</span>`;
+    }
+
+    let bubbleHtml = simpleMarkdown(data.content);
+
+    // Intent scores
+    if (data.intentScores) {
+      bubbleHtml += renderIntentScores(data.intentScores);
+    }
+
+    // Draft card
+    if (data.draft) {
+      bubbleHtml += `<div class="draft-card">
+        <h4>📋 行程草案 v${data.draft.version || 1}</h4>
+        <div class="draft-content">${simpleMarkdown(data.draft.itinerary_md || '')}</div>
+        <div class="draft-footer">
+          ${data.draft.estimated_cost ? `<span>💰 ${escapeHtml(data.draft.estimated_cost)}</span>` : ''}
+          ${data.draft.weather_summary ? `<span>🌤️ ${escapeHtml(data.draft.weather_summary)}</span>` : ''}
+        </div>
+      </div>`;
+    }
+
+    // Quote
+    if (data.quote) {
+      bubbleHtml += `<div class="draft-card">
+        <h4>💰 报价单</h4>
+        <div class="draft-content">${simpleMarkdown(data.quote)}</div>
+      </div>`;
+    }
+
+    div.innerHTML = `
+      <div class="msg-avatar">🤖</div>
+      <div>
+        <div class="msg-bubble">${bubbleHtml}</div>
+        <div class="msg-meta">${metaHtml}</div>
+      </div>`;
+  }
+
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function showLoading() {
+  const container = document.getElementById('chatMessages');
+  const empty = container.querySelector('.chat-empty');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'msg agent loading';
+  div.innerHTML = `
+    <div class="msg-avatar">🤖</div>
+    <div>
+      <div class="msg-bubble">
+        <span>思考中</span>
+        <div class="dot-flash"><span></span><span></span><span></span></div>
+      </div>
+    </div>`;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ====== API Call ======
+async function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const message = input.value.trim();
+  if (!message) return;
+
+  const config = getConfig();
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Render user message
+  renderMessage({ role: 'user', content: message });
+  showLoading();
+
+  const sendBtn = document.getElementById('sendBtn');
+  sendBtn.disabled = true;
+  input.disabled = true;
+
+  try {
+    const resp = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: config.session_id,
+        customer_id: config.customer_id,
+        channel: config.channel,
+        message: message,
+        language: config.language,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    renderMessage({
+      role: 'agent',
+      content: data.reply || '(无回复)',
+      branch: data.current_branch,
+      needHuman: data.need_human,
+      intentScores: data.intent_scores,
+      draft: data.draft,
+      quote: data.quote,
+    });
+  } catch (err) {
+    renderMessage({
+      role: 'agent',
+      content: `❌ 请求失败：${err.message}\n\n请确认后端服务已启动：\`python main.py\``,
+    });
+    showToast('API 连接失败，请确认服务已启动');
+  } finally {
+    sendBtn.disabled = false;
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+function sendQuick(message) {
+  document.getElementById('messageInput').value = message;
+  sendMessage();
+}
+
+function clearChat() {
+  const container = document.getElementById('chatMessages');
+  container.innerHTML = `<div class="chat-empty">
+    <div class="chat-empty-icon">💬</div>
+    <div style="font-size:15px;font-weight:500;">开始对话</div>
+    <div style="font-size:13px;">选择左侧快捷提示或输入你的问题</div>
+  </div>`;
+  newSession();
+}
+
+// Auto-resize textarea
+document.getElementById('messageInput').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// Health check on load
+(async function healthCheck() {
+  try {
+    const resp = await fetch(`${API_BASE}/health`);
+    if (resp.ok) {
+      const data = await resp.json();
+      document.querySelector('.status-text').textContent = `API ${data.version || 'ok'}`;
+    }
+  } catch {
+    document.querySelector('.status-dot').style.background = 'var(--danger)';
+    document.querySelector('.status-text').textContent = 'API 离线';
+    document.querySelector('.status-text').style.color = 'var(--danger)';
+  }
+})();
+</script>
+</body>
+</html>

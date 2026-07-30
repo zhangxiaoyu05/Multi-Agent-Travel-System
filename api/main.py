@@ -6,8 +6,11 @@
     python main.py
 """
 
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
@@ -39,9 +42,24 @@ app.add_middleware(
 _graph = build_graph()
 
 
+# 静态文件服务（前端页面）
+_static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
 # =============================================================================
 # 路由
 # =============================================================================
+
+
+@app.get("/")
+async def root():
+    """返回前端页面"""
+    index_path = os.path.join(_static_dir, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return {"message": "前端页面未找到，请访问 /docs 查看 API 文档"}
 
 
 @app.get("/health")
