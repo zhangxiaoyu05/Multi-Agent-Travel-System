@@ -27,7 +27,7 @@ def safe_print(*args, **kwargs):
 
 
 def test_graph(quick: bool = False):
-    """命令行快速测试 LangGraph 图——Phase 5
+    """命令行快速测试 LangGraph 图——Phase 6
 
     发送多条测试消息，验证：
     - 意图路由 + 客服 FAQ + 投诉转人工（Phase 3 回归）
@@ -36,6 +36,8 @@ def test_graph(quick: bool = False):
     - 意向评分 + 修订循环
     - checkpoint 持久化（多轮需求收集）
     - 终态写入（operations_sync 节点）
+    - 销售询价 + 报价生成 + 意向评估（Phase 6）
+    - 运营工单 + CRM 写入（Phase 6）
 
     Args:
         quick: True = 只跑快速测试（跳过行程生成，~15s）；False = 全量测试（~3min）
@@ -47,7 +49,7 @@ def test_graph(quick: bool = False):
 
     safe_print("=" * 60)
     mode_label = "Quick" if quick else "Full"
-    safe_print(f"LangGraph Graph Test —— Phase 5 ({mode_label})")
+    safe_print(f"LangGraph Graph Test —— Phase 6 ({mode_label})")
     safe_print("=" * 60)
 
     graph = build_graph()
@@ -239,9 +241,95 @@ def test_graph(quick: bool = False):
     safe_print(f"  Reply length   : {len(result8.get('final_reply', ''))} chars")
     safe_print(f"  [Phase 5] handoff should have gone through operations_sync")
 
+    # =========================================================================
+    # Phase 6 测试：销售 + 运营
+    # =========================================================================
+
+    # ---- 测试 9：销售——询价 + 报价生成（快：~5s）----
+    safe_print("\n>>> Test 9: Sales — Pricing Inquiry → Quote (Phase 6)")
+    safe_print("-" * 40)
+
+    result9 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "我想去三亚玩5天，2个人，每人预算2000美元，能给我报个价吗？"}],
+            "session_id": "test-p6-09",
+            "customer_id": "cust-p6-09",
+            "channel": "web",
+            "language": "zh",
+        },
+        config={"configurable": {"thread_id": "test-p6-09"}},
+    )
+
+    safe_print(f"  Intent scores  : {result9.get('intent_scores')}")
+    safe_print(f"  Branch         : {result9.get('current_branch')}")
+    safe_print(f"  Intent level   : {result9.get('intent_level')}")
+    safe_print(f"  Next action    : {result9.get('next_action')}")
+    safe_print(f"  need_human     : {result9.get('need_human')}")
+    safe_print(f"  Reply (trunc)  : {result9.get('final_reply', '')[:200]}")
+
+    # ---- 测试 10：销售——高意向购买（快：~5s）----
+    safe_print("\n>>> Test 10: Sales — High Intent Purchase (Phase 6)")
+    safe_print("-" * 40)
+
+    result10 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "这个报价不错，我要预订，怎么支付？"}],
+        },
+        config={"configurable": {"thread_id": "test-p6-09"}},  # 复用 session
+    )
+
+    safe_print(f"  Branch         : {result10.get('current_branch')}")
+    safe_print(f"  Intent level   : {result10.get('intent_level')}")
+    safe_print(f"  Next action    : {result10.get('next_action')}")
+    safe_print(f"  need_human     : {result10.get('need_human')}")
+    safe_print(f"  Reply (trunc)  : {result10.get('final_reply', '')[:200]}")
+    safe_print(f"  [Phase 6] High intent → should route to operations_sync")
+
+    # ---- 测试 11：运营——商家入驻咨询（快：~3s）----
+    safe_print("\n>>> Test 11: Operations — Merchant Onboarding (Phase 6)")
+    safe_print("-" * 40)
+
+    result11 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "我是旅行社的，想在你们平台上架产品，需要什么资质？"}],
+            "session_id": "test-p6-11",
+            "customer_id": "cust-p6-11",
+            "channel": "web",
+            "language": "zh",
+        },
+        config={"configurable": {"thread_id": "test-p6-11"}},
+    )
+
+    safe_print(f"  Intent scores  : {result11.get('intent_scores')}")
+    safe_print(f"  Branch         : {result11.get('current_branch')}")
+    safe_print(f"  need_human     : {result11.get('need_human')}")
+    safe_print(f"  Reply (trunc)  : {result11.get('final_reply', '')[:200]}")
+    safe_print(f"  [Phase 6] ops → should route through operations_sync (CRM written)")
+
+    # ---- 测试 12：运营——订单履约查询（快：~3s）----
+    safe_print("\n>>> Test 12: Operations — Order Fulfillment Query (Phase 6)")
+    safe_print("-" * 40)
+
+    result12 = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "我想查一下订单号 TK-2024-0815 的履约状态，酒店和车辆都确认好了吗？"}],
+            "session_id": "test-p6-12",
+            "customer_id": "cust-p6-12",
+            "channel": "web",
+            "language": "zh",
+        },
+        config={"configurable": {"thread_id": "test-p6-12"}},
+    )
+
+    safe_print(f"  Branch         : {result12.get('current_branch')}")
+    safe_print(f"  need_human     : {result12.get('need_human')}")
+    safe_print(f"  Reply (trunc)  : {result12.get('final_reply', '')[:200]}")
+    safe_print(f"  [Phase 6] ops fulfillment → should go through operations_sync")
+
     elapsed = time.time() - t_start
+    test_count = "8" if quick else "12"
     safe_print("\n" + "=" * 60)
-    safe_print(f"[OK] All {'4' if quick else '8'} tests completed in {elapsed:.1f}s")
+    safe_print(f"[OK] All {test_count} tests completed in {elapsed:.1f}s")
     safe_print("=" * 60)
 
 

@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-07-28
+> 最后更新：2026-07-30
 
 ---
 
@@ -246,44 +246,55 @@ Phase 3  ██████████  ✅ 客服 Agent + 人工接管        
 Phase 4  ██████████  ✅ 定制 Agent + 修订循环             2026-07-29 完成
 Phase 5  ██████████  ✅ 终态写入 + /chat API 联调         2026-07-29 完成
 ────────── MVP 完成线 ─────────────────────────────────────
-Phase 6  ░░░░░░░░░░  销售 Agent + 运营 Agent           后续
+Phase 6  ██████████  ✅ 销售 Agent + 运营 Agent         2026-07-30 完成
 Phase 7  ░░░░░░░░░░  RAG 增强（真实向量检索）           后续
 Phase 8  ░░░░░░░░░░  生产化（按需）                     后续
 ```
 
-### 下一步：Phase 5 ✅ 已完成
+### 下一步：Phase 6 ✅ 已完成
 
-**完成时间**：2026-07-29
+**完成时间**：2026-07-30
 
 ### 创建/更新的文件
 
 ```
+prompts/
+├── sales_agent.txt                          ← 新增：销售 Agent Prompt 模板
+└── operations_agent.txt                     ← 新增：运营 Agent Prompt 模板
 tools/
-├── mock_crm.py                            ← 新增：Mock CRM 客户记录写入
-├── mock_capi.py                           ← 新增：Mock CAPI 转化事件发送
+└── mock_quote.py                            ← 新增：Mock 报价工具（32 城市基准价）
+agents/
+├── sales_agent.py                           ← 新增：销售 Agent（报价+库存+意向评分）
+└── operations_agent.py                      ← 新增：运营 Agent（CRM+CAPI+工单升级）
 graph/nodes/
-└── operations_sync.py                     ← 新增：终态数据写入节点
-graph/builder.py                           ← 更新：添加 operations_sync 节点和边
-graph/conditions/revision_decision.py      ← 更新：accept→operations_sync 路由
-api/main.py                                ← 更新：实现 /chat API 端点
-main.py                                    ← 更新：8 组测试（含终态验证）
+├── sales_agent.py                           ← 新增：销售节点（薄层包装）
+└── operations_agent.py                      ← 新增：运营节点（薄层包装）
+graph/conditions/
+└── after_sales.py                           ← 新增：销售后置条件边
+graph/builder.py                             ← 更新：注册 sales/operations 节点和边
+graph/conditions/route_decision.py           ← 更新：sales/operations 指向真实 Agent
+prompts/intent_router.txt                    ← 更新：完善销售/运营意图区分规则
+main.py                                      ← 更新：12 组测试（含 Phase 6 销售+运营）
 ```
 
 ### 关键实现
 
-- **Mock CRM**：模拟客户记录写入，接收 customer_id + session_data，返回写入成功状态
-- **Mock CAPI**：模拟转化事件发送（session_completed / trip_confirmed / handoff），Phase 8 对接 Meta/Google/TikTok CAPI
-- **operations_sync 节点**：所有终态路径（行程确认 accept、转人工 handoff）必经节点，自动执行 CRM + CAPI 写入后透传 final_reply
-- **图结构调整**：human_handoff → operations_sync → END；revision_decision(accept) → operations_sync；其他路径保持不变
-- **`/chat` API 端点**：完整实现 POST /chat，接收 ChatRequest → 调用 graph.ainvoke() → 转换为 ChatResponse（含 draft/quote/intent_scores）
-- **会话隔离**：通过 session_id ↔ thread_id 映射，同一会话多轮消息自动保持上下文
+- **SalesAgent**：绑定 `quote_price` + `query_inventory` 两个工具，LLM 自主决策调用工具或直接回复。内置关键词意向评分（"预订/购买"→high，"考虑/优惠"→mid，"太贵/算了"→low），高意向接受 → operations_sync 终态写入（成交！）。检测投诉关键词自动转人工
+- **OperationsAgent**：绑定 `update_crm` + `send_capi` 两个工具，处理商家入驻、订单履约、售后工单、平台规则咨询。所有操作强制写入 CRM 记录（LLM 未调用时兜底补充写入），严重投诉（安全事故/媒体曝光等）升级转人工
+- **Mock Quote**：32 个城市基准价（人均/天），支持主题因子（美食+15%/自然-5%）、节奏因子（轻松+30%/紧凑-15%）、双币种（¥/$）自动换算，输出含住宿/交通/门票/餐饮/导游 5 项明细的结构化报价单
+- **销售分支流转**：sales_agent → after_sales → {high/accept→operations_sync, need_human→human_handoff, 其他→END}
+- **运营分支流转**：operations_agent → {need_human→human_handoff, 其他→operations_sync} → END
+- **图结构更新**：四分支完整版（customer_service / sales_agent / operations_agent / trip_planner），所有终态路径汇聚到 operations_sync
 
 ### 验证结果
 
-- `python main.py test` → 8 组测试用例全部通过
-- 测试 1-6：Phase 3-4 回归正常
-- 测试 7：行程确认 → operations_sync 正常执行（CRM + CAPI）
-- 测试 8：转人工 → human_handoff → operations_sync 链路完整
+- `python main.py test --quick` → 8 组快速测试全部通过
+- `python main.py test` → 12 组全量测试全部通过
+- 测试 1-8：Phase 3-5 回归正常
+- 测试 9：销售询价（三亚 5 天 $2000/人）→ 正确路由 sales (0.9)，生成报价单，intent=high
+- 测试 10：同 session 高意向购买（"我要预订"）→ intent=high+accept，路由到 operations_sync
+- 测试 11：商家入驻咨询 → 正确路由 operations (1.0)，CRM 写入正常
+- 测试 12：订单履约查询 → 正确路由 operations，CRM 写入+履约状态回复完整
 
 ---
 
@@ -304,3 +315,4 @@ main.py                                    ← 更新：8 组测试（含终态�
 | 2026-07-29 | Phase 3：客服 Agent（LLM+Tools）+ 人工接管（交接单）+ after_service 条件边 | ✅ |
 | 2026-07-29 | Phase 4：定制 Agent（需求提取+草案生成）+ 修订循环 + 意向评分 | ✅ |
 | 2026-07-29 | Phase 5：终态写入（operations_sync + CRM/CAPI）+ /chat API 联调，MVP 完成 | ✅ |
+| 2026-07-30 | Phase 6：销售 Agent（报价+意向评分）+ 运营 Agent（入驻+履约+工单），四分支完整版 | ✅ |

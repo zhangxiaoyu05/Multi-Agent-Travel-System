@@ -9,8 +9,8 @@ from graph.state import AgentState
 # MVP 阶段销售(sales)和运营(operations)暂不启用，兜底到客服
 _BRANCH_MAP = {
     "service": "customer_service",
-    "sales": "customer_service",       # Phase 6 改回 "sales_agent"
-    "operations": "customer_service",   # Phase 6 改回 "operations_agent"
+    "sales": "sales_agent",
+    "operations": "operations_agent",
     "planner": "trip_planner",
 }
 
