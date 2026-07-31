@@ -24,6 +24,10 @@
 ```
 
 > 💡 **共享黑板**：所有节点共用 `AgentState`，字段有明确 owner。新增 `handoff`（转人工上下文）、`agent_traces`（追加式审计日志）、`branch_history`（路径追踪）。分支切换时自动重置控制信号防止跨分支污染。
+> 
+> 🛡️ **意图预过滤**：能力询问/寒暄/道谢类消息跳过 LLM，正则匹配后直接免转人工路由到客服——消除 LLM hallucinate `need_human=true` 导致的误判。
+>
+> 🎨 **Markdown 渲染**：AI 回复使用原生 Markdown 格式（标题/分隔线/列表/代码块/粗体），前端块级解析引擎渲染，告别 ASCII `====`/`----` 符号。
 
 ## 技术栈
 
@@ -307,7 +311,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase | 内容 | 状态 |
 |-------|------|:---:|
 | Phase 0 | 项目骨架 + Docker 环境 | ✅ |
-| Phase 1-2 | State 共享黑板 v2（字段所有权契约 + HandoffContext + AgentTrace）+ 意图路由器 v3（路由节点+条件分离，分支切换信号重置） | ✅ |
+| Phase 1-2 | State 共享黑板 v2（字段所有权契约 + HandoffContext + AgentTrace）+ 意图路由器 v3（路由节点+条件分离，预过滤器防 LLM 误判，分支惯性偏向） | ✅ |
 | Phase 3 | 客服 Agent + 人工接管 | ✅ |
 | Phase 4 | 定制 Agent + 修订循环 | ✅ |
 | Phase 5 | 终态写入 + /chat 联调 | ✅ |
@@ -315,6 +319,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 7 | RAG 增强（Milvus 向量检索） | ✅ |
 | Phase 8 | 基础设施升级（MySQL + Redis + Docker 全容器化） | ✅ |
 | Phase 9 | SSE 流式输出（进度推送 + 降级兼容） | ✅ |
+| Phase 10 | 意图路由预过滤 + Markdown 渲染引擎 + AI 回复格式美化 + 消息框对齐 | ✅ |
 
 ## 许可证
 

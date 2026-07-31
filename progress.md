@@ -255,6 +255,7 @@ Phase 6  ██████████  ✅ 销售 Agent + 运营 Agent        
 Phase 7  ██████████  ✅ RAG 增强（真实向量检索）         2026-07-30 完成
 Phase 8  ██████████  ✅ 基础设施升级（Milvus+MySQL+Redis）  2026-07-30 完成
 Phase 9  ██████████  ✅ SSE 流式输出（进度推送 + 降级兼容）   2026-07-30 完成
+Phase 10 ██████████  ✅ 意图预过滤 + Markdown 渲染 + 格式美化 + 对齐修复 2026-07-31 完成
 ```
 
 ### 下一步：持续优化
@@ -533,4 +534,6 @@ event: error           → {"message":"..."}
 | 2026-07-31 | Chrome DevTools E2E 测试 + Bug 修复：① passlib 与新版 bcrypt 不兼容 → 改用 bcrypt 直接调用；② Python getattr 急切求值导致 StructuredTool.__name__ 崩溃 → 改用 hasattr 判断；③ 前端 API_BASE 改为相对路径适配同源部署。全链路验证：登录/注册/多对话/SSE 流式/行程定制/删除对话/退出 均通过 | ✅ |
 | 2026-07-31 | 三项优化：① Milvus REST API v1→v2 路径修复（/api/v1/ → /v2/vectordb/），新增 dbName 参数 + 3 次重试 + 增强日志，彻底解决回退到 JSON 问题；② Mock 工具升级：新增 Open-Meteo 真实天气 API（45 城、零 API Key）、TOOL_MODE 双模式切换、日历扩展节假日到 2027 年、5 个真实接口骨架文件（inventory/quote/crm/capi）；③ 测试补齐：新增 test_auth.py（17 用例）、test_conversations.py（9 用例）、test_api.py（9 用例），总测试数 142 → 177 | ✅ |
 | 2026-07-31 | 共享黑板 v2 重构：① AgentState 新增 HandoffContext + AgentTrace 类型 + 3 个字段（handoff / agent_traces / branch_history），用结构化上下文替代裸 need_human 判断；② 字段所有权契约——每个字段明确 owner 节点，追加型字段使用 _append_list reducer；③ route_decision 拆为节点+条件（解决条件边不能写 State 的 LangGraph 限制），分支切换时自动重置 intent_level/next_action 防止跨分支污染；④ 7 个节点写入 agent_traces 审计日志，4 个节点写入 handoff 上下文（含 from_agent + reason + priority + summary），human_handoff 交接单包含优先级标签+报价单+Agent 执行链；⑤ 12 个文件改动，177 测试全部通过 | ✅ |
+| 2026-07-31 | 意图路由修复 + AI 格式美化：① 新增预过滤器 _prefilter_user_message()——12 种能力询问 + 6 种寒暄正则匹配后跳过 LLM，直接返回 service=0.95 / need_human=false，解决"你能干什么"等被误判转人工；② Prompt 增强：intent_router.txt 新增能力询问/寒暄/道谢规则，收紧 need_human 触发条件，防止历史上下文污染；customer_service.txt 新增平台 5 大能力介绍，客服可直接介绍系统功能；③ 投诉优先级判断从 LLM service>0.7 改为 _has_complaint_intent() 关键词匹配，区分"我要投诉"（urgent）vs"投诉流程"（FAQ）；④ human_handoff.py 用 Markdown 标题+`---` 分隔线替代 ASCII `====`/`----` 符号，意图分数格式化为 'service=90%' 可读格式；⑤ 前端 simpleMarkdown 增强——代码块/分隔线/列表包裹/粗体/标题 h1-h3；CSS 新增 agent 气泡内 Markdown 样式（h1/h2/h3/hr/ul/li/code/pre/strong/p） | ✅ |
+| 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
 
