@@ -37,11 +37,13 @@
 | 前端 | 原生 HTML/CSS/JS（仿 DeepSeek） | 登录/多对话/SSE 流式输出 |
 | 多语言 | zh / en / ja / ko | 中文 + 英文 + 日文 + 韩文 |
 | Embedding | 百炼 text-embedding-v4 | 1024 维向量 |
-| 向量数据库 | Milvus 2.4（单机） | HNSW 索引 + COSINE 相似度 |
+| 向量数据库 | Milvus 2.4（单机） | HNSW 索引 + COSINE 相似度 + REST API v2 |
 | 关系数据库 | MySQL 8.0 | 会话存储 + LangGraph Checkpoint |
 | 缓存 | Redis 7 | 会话历史 + 摘要缓存 |
 | Python | 3.12 | |
 | 容器化 | Docker + docker-compose | 一键部署 |
+
+**环境变量**：`TOOL_MODE=mock` 切换工具后端（mock=模拟数据 / real=真实 API）。当前天气已对接 Open-Meteo 免费 API（无需 API Key）。
 
 ## 项目结构
 
@@ -82,12 +84,18 @@ Multi_Agent/
 ├── tools/                 # LangChain Tools
 │   ├── rag_faq.py         # RAG FAQ（Milvus 向量检索 + 关键词兜底）
 │   ├── mock_handoff.py    # 转人工评估
-│   ├── mock_weather.py    # 天气查询（12 城市）
-│   ├── mock_calendar.py   # 节假日 / 人流量
+│   ├── mock_weather.py    # 天气查询（12 城市 Mock + Open-Meteo 真实 API）
+│   ├── weather_real.py    # 真实天气（Open-Meteo 免费 API，45 城市）
+│   ├── mock_calendar.py   # 节假日 / 人流量（真实星期计算 + 内置节假日）
+│   ├── calendar_real.py   # 真实日历 API 骨架
 │   ├── mock_inventory.py  # 酒店 / 门票 / 车辆库存
+│   ├── inventory_real.py  # 真实库存 API 骨架
 │   ├── mock_quote.py      # 报价生成（32 城市基准价）
+│   ├── quote_real.py      # 真实报价 API 骨架
 │   ├── mock_crm.py        # CRM 客户记录写入
-│   └── mock_capi.py       # CAPI 转化事件发送
+│   ├── crm_real.py        # 真实 CRM API 骨架
+│   ├── mock_capi.py       # CAPI 转化事件发送
+│   └── capi_real.py       # 真实 CAPI API 骨架
 ├── services/              # 基础设施
 │   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max）
 │   ├── embeddings.py      # Embedding（text-embedding-v4，DashScope 原生 API）
@@ -108,7 +116,7 @@ Multi_Agent/
 │   ├── trip_planner.txt
 │   ├── sales_agent.txt
 │   └── operations_agent.txt
-├── tests/                 # 单元测试（142 个用例）
+├── tests/                 # 单元测试（177 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
 │   ├── test_graph.py
@@ -116,7 +124,10 @@ Multi_Agent/
 │   ├── test_customer_service.py
 │   ├── test_trip_planner.py
 │   ├── test_sales.py
-│   └── test_operations.py
+│   ├── test_operations.py
+│   ├── test_auth.py        # 认证测试（JWT + 注册/登录）
+│   ├── test_conversations.py  # 对话 CRUD 测试
+│   └── test_api.py         # API 端点测试（/health /chat /chat/stream）
 ├── pytest.ini             # pytest-asyncio 配置
 ├── docker-compose.yml     # Docker Compose 编排（6 个服务）
 ├── Dockerfile
@@ -200,12 +211,12 @@ python -m api.main test --quick   # 快速模式（跳过行程生成）
 ```json
 {
   "status": "ok",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "components": {
     "api": "ok",
     "mysql": "ok",
     "redis": "ok",
-    "milvus": {"status": "ok", "count": 30, "backend": "Milvus"}
+    "milvus": {"status": "ok", "count": 30, "backend": "Milvus REST v2"}
   }
 }
 ```
@@ -229,7 +240,7 @@ event: done            → {完整 ChatResponse}
 ## 测试
 
 ```bash
-# 运行全部 142 个单元测试（~6s，含异步测试）
+# 运行全部 177 个单元测试（~8s，含异步测试 + auth/API/SSE）
 python -m pytest tests/ -v
 
 # 运行端到端集成测试

@@ -1,8 +1,10 @@
 """向量存储——Milvus + JSON 双模式
 
 自动选择后端：
-- Milvus 可用 → 使用 Milvus REST API（生产模式）
+- Milvus 可用 → 使用 Milvus REST API v2（生产模式）
 - Milvus 不可用 → 使用 JSON 文件 + 余弦相似度（开发/回退模式）
+
+Milvus v2.4 RESTful API 路径：http://host:port/v2/vectordb/
 
 使用方式：
     from services.vector_store import search_knowledge, add_documents, get_collection_stats
@@ -11,6 +13,7 @@
 import os
 import json
 import math
+import time
 import logging
 import httpx
 from services.embeddings import embed_text, embed_texts, get_embedding_dim
@@ -27,48 +30,77 @@ _json_store: dict | None = None  # {"documents": [...], "embeddings": [...]}
 
 _backend: str | None = None  # "milvus" | "json" | None (未检测)
 
+# Milvus v2 RESTful API 重试配置
+_DETECT_MAX_RETRIES = 3
+_DETECT_RETRY_DELAY = 3.0  # 秒
+
 
 def _get_milvus_config():
     return {
         "host": os.getenv("MILVUS_HOST", "milvus-standalone"),
         "port": os.getenv("MILVUS_PORT", "19530"),
         "collection": os.getenv("MILVUS_COLLECTION", "travel_knowledge"),
+        "db": os.getenv("MILVUS_DB", "default"),
     }
 
 
 def _milvus_url(path: str = "") -> str:
+    """构建 Milvus v2 RESTful API URL
+
+    Milvus 2.4 使用 /v2/vectordb/ 前缀（非旧版 /api/v1/）。
+    """
     c = _get_milvus_config()
-    return f"http://{c['host']}:{c['port']}/api/v1{path}"
+    return f"http://{c['host']}:{c['port']}/v2/vectordb{path}"
+
+
+def _milvus_req_body(extra: dict | None = None) -> dict:
+    """构建带 dbName 的基础请求体"""
+    c = _get_milvus_config()
+    return {"dbName": c["db"], **(extra or {})}
 
 
 # =============================================================================
-# 后端检测
+# 后端检测（带重试）
 # =============================================================================
 
 
 def _detect_backend() -> str:
-    """检测可用的后端：Milvus REST → JSON fallback"""
+    """检测可用的后端：Milvus REST → JSON fallback
+
+    Milvus 容器启动后 proxy 服务需要时间初始化，最多重试 3 次。
+    """
     global _backend
 
     if _backend is not None:
         return _backend
 
-    # 尝试 Milvus
-    try:
-        resp = httpx.get(
-            _milvus_url("/collection/list"),
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            _backend = "milvus"
-            logger.info("Vector backend: Milvus REST API")
-            return _backend
-    except Exception:
-        pass
+    for attempt in range(1, _DETECT_MAX_RETRIES + 1):
+        try:
+            resp = httpx.post(
+                _milvus_url("/collections/list"),
+                json=_milvus_req_body(),
+                headers={"accept": "application/json", "content-type": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                _backend = "milvus"
+                logger.info("Vector backend: Milvus REST API v2 "
+                            f"({_get_milvus_config()['host']}:{_get_milvus_config()['port']})")
+                return _backend
+            logger.debug(f"Milvus probe returned {resp.status_code} (attempt {attempt}/{_DETECT_MAX_RETRIES})")
+        except Exception as e:
+            logger.debug(f"Milvus probe failed: {e} (attempt {attempt}/{_DETECT_MAX_RETRIES})")
+
+        if attempt < _DETECT_MAX_RETRIES:
+            logger.info(f"Retrying Milvus connection in {_DETECT_RETRY_DELAY}s...")
+            time.sleep(_DETECT_RETRY_DELAY)
 
     # 回退到 JSON
     _backend = "json"
-    logger.info("Vector backend: JSON file (Milvus unavailable)")
+    logger.warning(
+        f"Milvus unavailable after {_DETECT_MAX_RETRIES} attempts, "
+        f"falling back to JSON file ({_JSON_FILE})"
+    )
     return _backend
 
 
@@ -88,7 +120,7 @@ def init_milvus():
 
 
 def _init_milvus_backend():
-    """通过 REST API 初始化 Milvus Collection"""
+    """通过 Milvus v2 RESTful API 初始化 Collection"""
     config = _get_milvus_config()
     dim = get_embedding_dim()
     collection_name = config["collection"]
@@ -96,64 +128,70 @@ def _init_milvus_backend():
     try:
         # 检查 Collection 是否存在
         resp = httpx.post(
-            _milvus_url("/collection/describe"),
-            json={"collectionName": collection_name},
+            _milvus_url("/collections/describe"),
+            json=_milvus_req_body({"collectionName": collection_name}),
+            headers={"accept": "application/json", "content-type": "application/json"},
             timeout=10,
         )
 
         if resp.status_code == 200:
             # 加载到内存
             httpx.post(
-                _milvus_url("/collection/load"),
-                json={"collectionName": collection_name},
-                timeout=10,
+                _milvus_url("/collections/load"),
+                json=_milvus_req_body({"collectionName": collection_name}),
+                headers={"accept": "application/json", "content-type": "application/json"},
+                timeout=30,
             )
             logger.info(f"Milvus collection '{collection_name}' loaded (dim={dim})")
         else:
-            # 创建 Collection
-            httpx.post(
-                _milvus_url("/collection/create"),
-                json={
-                    "collectionName": collection_name,
-                    "dimension": dim,
-                    "metricType": "COSINE",
-                    "primaryField": "id",
-                    "vectorField": "embedding",
-                    "schema": {
-                        "fields": [
-                            {"name": "id", "dataType": "Int64", "isPrimary": True, "autoID": True},
-                            {"name": "content", "dataType": "VarChar",
-                             "elementTypeParams": {"max_length": "65535"}},
-                            {"name": "embedding", "dataType": "FloatVector",
-                             "elementTypeParams": {"dim": str(dim)}},
-                            {"name": "category", "dataType": "VarChar",
-                             "elementTypeParams": {"max_length": "128"}},
-                            {"name": "tags", "dataType": "VarChar",
-                             "elementTypeParams": {"max_length": "512"}},
-                        ]
-                    }
+            # 创建 Collection（v2 schema format）
+            create_body = _milvus_req_body({
+                "collectionName": collection_name,
+                "dimension": dim,
+                "metricType": "COSINE",
+                "primaryField": "id",
+                "vectorField": "embedding",
+                "schema": {
+                    "fields": [
+                        {"name": "id", "dataType": "Int64", "isPrimary": True, "autoID": True},
+                        {"name": "content", "dataType": "VarChar",
+                         "elementTypeParams": {"max_length": "65535"}},
+                        {"name": "embedding", "dataType": "FloatVector",
+                         "elementTypeParams": {"dim": str(dim)}},
+                        {"name": "category", "dataType": "VarChar",
+                         "elementTypeParams": {"max_length": "128"}},
+                        {"name": "tags", "dataType": "VarChar",
+                         "elementTypeParams": {"max_length": "512"}},
+                    ]
                 },
+            })
+            httpx.post(
+                _milvus_url("/collections/create"),
+                json=create_body,
+                headers={"accept": "application/json", "content-type": "application/json"},
                 timeout=30,
             )
             # 创建索引
             httpx.post(
-                _milvus_url("/index/create"),
-                json={
+                _milvus_url("/indexes/create"),
+                json=_milvus_req_body({
                     "collectionName": collection_name,
                     "indexParams": [{
                         "fieldName": "embedding",
                         "indexName": "embedding_idx",
                         "metricType": "COSINE",
                         "indexType": "HNSW",
-                        "params": '{"M": 16, "efConstruction": 200}',
-                    }]
-                },
+                        "params": {"M": 16, "efConstruction": 200},
+                    }],
+                }),
+                headers={"accept": "application/json", "content-type": "application/json"},
                 timeout=30,
             )
             # 加载
             httpx.post(
-                _milvus_url("/collection/load"),
-                json={"collectionName": collection_name},
+                _milvus_url("/collections/load"),
+                json=_milvus_req_body({"collectionName": collection_name}),
+                headers={"accept": "application/json", "content-type": "application/json"},
                 timeout=30,
             )
             logger.info(f"Milvus collection '{collection_name}' created (dim={dim})")
@@ -173,6 +211,7 @@ def _init_json_backend():
         try:
             with open(_JSON_FILE, "r", encoding="utf-8") as f:
                 _json_store = json.load(f)
+            logger.info(f"Loaded JSON vector store: {len(_json_store.get('documents', []))} documents")
         except (json.JSONDecodeError, IOError):
             _json_store = {"documents": [], "embeddings": []}
     else:
@@ -218,30 +257,38 @@ def search_knowledge(query: str, top_k: int = 3, score_threshold: float = 0.3) -
 
 
 def _search_milvus(query: str, top_k: int, score_threshold: float) -> list[dict]:
-    """Milvus REST API 检索"""
+    """Milvus v2 RESTful API 向量检索"""
     config = _get_milvus_config()
     try:
         query_vector = embed_text(query)
         resp = httpx.post(
-            _milvus_url("/search"),
-            json={
+            _milvus_url("/entities/search"),
+            json=_milvus_req_body({
                 "collectionName": config["collection"],
                 "vector": query_vector,
                 "limit": top_k * 2,
                 "outputFields": ["content", "category", "tags"],
-                "params": '{"ef": 64}',
-            },
+            }),
+            headers={"accept": "application/json", "content-type": "application/json"},
             timeout=30,
         )
         if resp.status_code != 200:
+            logger.warning(f"Milvus search returned {resp.status_code}")
             return []
 
         data = resp.json()
-        results = data.get("results", data if isinstance(data, dict) else [data])
-        results = results if isinstance(results, list) else [results]
+        # v2 API 响应格式: {"code": 200, "data": [[{...}, {...}]]}
+        result_data = data.get("data", data)
+        if isinstance(result_data, list) and result_data:
+            # data[0] 是第一个（也是唯一一个）query vector 的结果
+            items = result_data[0] if isinstance(result_data[0], list) else result_data
+        elif isinstance(result_data, dict):
+            items = result_data.get("results", [])
+        else:
+            return []
 
         hits = []
-        for item in results:
+        for item in items:
             score = item.get("score", item.get("distance", 0))
             if score >= score_threshold:
                 hits.append({
@@ -254,7 +301,7 @@ def _search_milvus(query: str, top_k: int, score_threshold: float) -> list[dict]
                 })
         return hits[:top_k]
     except Exception as e:
-        logger.error(f"Milvus search error: {e}")
+        logger.warning(f"Milvus search error, falling back to JSON: {e}")
         return _search_json(query, top_k, score_threshold)
 
 
@@ -314,7 +361,7 @@ def add_documents(docs: list[dict]) -> int:
 
 
 def _add_milvus(docs: list[dict]) -> int:
-    """Milvus REST API 批量插入"""
+    """Milvus v2 RESTful API 批量插入"""
     config = _get_milvus_config()
     try:
         contents = [d.get("content", "") for d in docs if d.get("content")]
@@ -339,10 +386,23 @@ def _add_milvus(docs: list[dict]) -> int:
 
         resp = httpx.post(
             _milvus_url("/entities/insert"),
-            json={"collectionName": config["collection"], "data": data_rows},
+            json=_milvus_req_body({
+                "collectionName": config["collection"],
+                "data": data_rows,
+            }),
+            headers={"accept": "application/json", "content-type": "application/json"},
             timeout=60,
         )
-        return len(data_rows) if resp.status_code == 200 else 0
+
+        if resp.status_code == 200:
+            resp_data = resp.json()
+            inserted = len(data_rows)
+            # v2 API 可能返回 {"code": 200, "data": {"insertCount": N}}
+            if isinstance(resp_data.get("data"), dict):
+                inserted = resp_data["data"].get("insertCount", inserted)
+            logger.info(f"Milvus inserted {inserted} documents")
+            return inserted
+        return 0
     except Exception as e:
         logger.warning(f"Milvus insert failed, using JSON: {e}")
         return _add_json(docs)
@@ -392,20 +452,23 @@ def get_collection_stats() -> dict:
         config = _get_milvus_config()
         try:
             resp = httpx.post(
-                _milvus_url("/collection/describe"),
-                json={"collectionName": config["collection"]},
-                timeout=5,
+                _milvus_url("/collections/describe"),
+                json=_milvus_req_body({"collectionName": config["collection"]}),
+                headers={"accept": "application/json", "content-type": "application/json"},
+                timeout=10,
             )
             if resp.status_code == 200:
                 data = resp.json()
+                # v2 API: {"code": 200, "data": {"collectionName": ..., "numEntities": ...}}
+                inner = data.get("data", data)
                 return {
-                    "count": data.get("numEntities", data.get("num_entities", 0)),
+                    "count": inner.get("numEntities", inner.get("num_entities", 0)),
                     "name": config["collection"],
                     "host": f"{config['host']}:{config['port']}",
-                    "backend": "Milvus REST",
+                    "backend": "Milvus REST v2",
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Milvus stats error: {e}")
 
     # JSON backend
     global _json_store

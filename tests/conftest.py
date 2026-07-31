@@ -3,10 +3,15 @@
 为所有测试模块提供可复用的测试状态和 Mock 对象。
 """
 
+import os
 import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
 from langchain_core.messages import HumanMessage, AIMessage
+
+# 确保测试环境始终使用 memory checkpoint（无需 MySQL）
+os.environ.setdefault("CHECKPOINT_BACKEND", "memory")
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-pytest")
 
 
 # =============================================================================
@@ -176,3 +181,70 @@ def run_async(coro):
     with concurrent.futures.ThreadPoolExecutor() as executor:
         future = executor.submit(asyncio.run, coro)
         return future.result()
+
+
+# =============================================================================
+# API 测试 fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def api_app():
+    """创建 FastAPI app（不含 lifespan，用于 TestClient）。
+
+    lifespan 中的 MySQL/Redis/Milvus 初始化会被跳过。
+    """
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+
+    test_app = FastAPI(
+        title="Test App",
+        version="0.3.0",
+        # 跳过 lifespan，避免基础设施连接
+    )
+
+    test_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    return test_app
+
+
+@pytest.fixture
+def auth_token() -> str:
+    """生成有效 JWT token（test-user-01）"""
+    from api.auth import create_token
+    return create_token("test-user-01", "testuser")
+
+
+@pytest.fixture
+def auth_header(auth_token: str) -> dict:
+    """Bearer Authorization header"""
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
+@pytest.fixture(autouse=True)
+def mock_user_store():
+    """Mock UserStore 的所有 import 路径（auth + main + services）。
+
+    auth.py 和 main.py 中的端点函数都在内部 import UserStore，
+    需要 patch 所有路径。autouse=True 确保所有 API 测试自动生效。
+    """
+    mock_store = MagicMock()
+    mock_store.get_user_by_username = AsyncMock(return_value=None)
+    mock_store.create_user = AsyncMock()
+    mock_store.list_conversations = AsyncMock(return_value=[])
+    mock_store.create_conversation = AsyncMock()
+    mock_store.delete_conversation = AsyncMock(return_value=True)
+    mock_store.get_conversation = AsyncMock(return_value=None)
+    mock_store.update_conversation_title = AsyncMock()
+
+    mock_cls = MagicMock(return_value=mock_store)
+
+    with patch("api.auth.UserStore", mock_cls), \
+         patch("services.user_store.UserStore", mock_cls):
+        yield mock_store
