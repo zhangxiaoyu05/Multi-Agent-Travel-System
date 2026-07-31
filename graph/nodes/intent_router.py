@@ -1,9 +1,15 @@
-"""意图路由器——使用结构化输出做四分类（httpx 直连版）"""
+"""意图路由器——使用结构化输出做四分类（httpx 直连版）
+
+v2: 整合对话历史 + current_branch 上下文，避免跟进消息被误路由。
+"""
 
 from pydantic import BaseModel, Field
 from graph.state import AgentState
 from services.llm import get_router_llm
 from prompts import load_prompt
+
+# 注入到 LLM 上下文的历史消息条数（用户 + AI 交替）
+_CONTEXT_WINDOW = 6
 
 
 class IntentResult(BaseModel):
@@ -16,8 +22,36 @@ class IntentResult(BaseModel):
     reasoning: str = Field(default="", description="简短判断原因")
 
 
+def _build_context_messages(messages: list, max_count: int = _CONTEXT_WINDOW) -> list[dict]:
+    """将最近的 N 条消息转换为 LLM 上下文格式。
+
+    只保留人类和 AI 消息（跳过 System / Tool），并截断过长内容。
+    """
+    ctx = []
+    for msg in messages[-max_count * 2:]:  # 多取一些再过滤
+        role = None
+        if hasattr(msg, "type"):
+            if msg.type == "human":
+                role = "user"
+            elif msg.type == "ai":
+                role = "assistant"
+        if role is None:
+            continue
+
+        content = msg.content if hasattr(msg, "content") else str(msg)
+        if len(content) > 500:
+            content = content[:500] + "…"
+        ctx.append({"role": role, "content": content})
+
+    return ctx[-max_count:]
+
+
 def intent_router(state: AgentState) -> dict:
-    """分析用户消息，输出意图分数和转人工判断（同步，无异步调用）"""
+    """分析用户消息，输出意图分数和转人工判断（同步，无异步调用）
+
+    与 v1 的关键区别：把对话历史 + current_branch 传给 LLM，
+    让模型知道"用户正在一个定制流程中补充信息"，而非独立判断。
+    """
     messages = state.get("messages", [])
     if not messages:
         return {"intent_scores": {}, "need_human": False}
@@ -31,15 +65,27 @@ def intent_router(state: AgentState) -> dict:
             "need_human": False,
         }
 
+    # ---- 构建上下文 ----
+    current_branch = state.get("current_branch", "")
+    history = _build_context_messages(messages)
+
+    # 把上下文信息嵌入 system prompt
+    system_prompt = load_prompt("intent_router.txt")
+    if current_branch:
+        system_prompt += (
+            f"\n\n**当前会话状态**：用户正在「{current_branch}」分支中。"
+            f"若最新消息是该分支的自然延续（补充信息、确认、追问），请大幅提高该分支概率。"
+        )
+
     llm = get_router_llm()
     structured_llm = llm.with_structured_output(IntentResult)
-    system_prompt = load_prompt("intent_router.txt")
+
+    # 组合调用：system + 历史 + 最新消息
+    invoke_messages = [{"role": "system", "content": system_prompt}]
+    invoke_messages.extend(history)
 
     try:
-        result: IntentResult = structured_llm.invoke([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ])
+        result: IntentResult = structured_llm.invoke(invoke_messages)
     except Exception:
         result = IntentResult(
             service=1.0, sales=0.0, operations=0.0, planner=0.0,

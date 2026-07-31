@@ -139,6 +139,8 @@ Multi_Agent/
 
 ### Docker 部署（推荐）
 
+> 💡 国内网络环境已配置阿里云镜像源（apt + pip），无需额外配置即可快速构建。
+
 ```bash
 # 1. 克隆项目
 git clone https://github.com/zhangxiaoyu05/Multi-Agent-Travel-System.git
@@ -303,7 +305,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase | 内容 | 状态 |
 |-------|------|:---:|
 | Phase 0 | 项目骨架 + Docker 环境 | ✅ |
-| Phase 1-2 | State + 意图路由器 | ✅ |
+| Phase 1-2 | State + 意图路由器（v2：对话历史 + 分支惯性偏向） | ✅ |
 | Phase 3 | 客服 Agent + 人工接管 | ✅ |
 | Phase 4 | 定制 Agent + 修订循环 | ✅ |
 | Phase 5 | 终态写入 + /chat 联调 | ✅ |
