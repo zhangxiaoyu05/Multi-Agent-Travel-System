@@ -68,6 +68,7 @@ def human_handoff(state: AgentState) -> dict:
     need = state.get("need", {}) or {}
     if need and any(v for v in need.values()):
         lines.append("---")
+        lines.append("")
         lines.append("### 已收集的出行需求")
         lines.append("")
         if need.get("destination"):
@@ -92,6 +93,7 @@ def human_handoff(state: AgentState) -> dict:
     draft = state.get("draft", {}) or {}
     if draft.get("version"):
         lines.append("---")
+        lines.append("")
         lines.append(f"### 行程草案 v{draft['version']}")
         lines.append("")
         lines.append(f"- 修订次数：{state.get('revision_count', 0)}")
@@ -106,6 +108,7 @@ def human_handoff(state: AgentState) -> dict:
     quote = state.get("quote", "")
     if quote:
         lines.append("---")
+        lines.append("")
         lines.append("### 报价单")
         lines.append("")
         lines.append(quote[:400])
@@ -117,6 +120,7 @@ def human_handoff(state: AgentState) -> dict:
         last = messages[-1]
         last_text = last.content if hasattr(last, "content") else str(last)
         lines.append("---")
+        lines.append("")
         lines.append("### 最后一条用户消息")
         lines.append("")
         lines.append(last_text[:300])
@@ -126,6 +130,7 @@ def human_handoff(state: AgentState) -> dict:
     traces = state.get("agent_traces", [])
     if traces:
         lines.append("---")
+        lines.append("")
         lines.append("### Agent 执行链")
         lines.append("")
         for t in traces[-6:]:
