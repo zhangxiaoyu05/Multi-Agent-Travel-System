@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from jose import jwt, JWTError
-from passlib.context import CryptContext
+import bcrypt
 from services.user_store import UserStore
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "travel-agent-dev-secret-key-change-in-prod")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -103,7 +101,7 @@ async def register(req: AuthRequest):
 
     # 创建用户
     user_id = f"user-{uuid.uuid4().hex[:12]}"
-    hashed = pwd_context.hash(req.password)
+    hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
     await store.create_user(user_id, req.username, hashed)
 
     token = create_token(user_id, req.username)
@@ -125,7 +123,7 @@ async def login(req: AuthRequest):
     if not user:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    if not pwd_context.verify(req.password, user["password"]):
+    if not bcrypt.checkpw(req.password.encode(), user["password"].encode()):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     token = create_token(user["user_id"], user["username"])

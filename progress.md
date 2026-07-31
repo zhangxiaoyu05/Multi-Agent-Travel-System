@@ -530,4 +530,5 @@ event: error           → {"message":"..."}
 | 2026-07-31 | 架构优化：① 去 langchain-openai 依赖，改用 httpx 直连百炼（BailianLLM，~350 行）；② Agent 全异步化（async run + llm.ainvoke）；③ Tool-calling 样板代码提取到 BaseAgent._run_tool_calling_loop()，3 个 Agent 从 ~90 行缩减到 ~30 行；④ 多语言支持（zh/en/ja/ko），语言指令注入 + 前端语言选择器 | ✅ |
 | 2026-07-31 | 测试补全：新增 test_sales.py（21 用例）+ test_operations.py（14 用例），总测试数 142 个全部通过（~6s）。AsyncMock 适配异步节点 | ✅ |
 | 2026-07-31 | 前端重构 + 登录 + 模型升级：① 前端仿 DeepSeek 布局（侧边栏对话列表 + 多对话窗口 + 注册/登录/退出），丢弃快速测试面板；② 新增认证系统（JWT + bcrypt，3 个新文件：api/auth.py、api/dependencies.py、services/user_store.py）；③ 新增对话管理 API（CRUD + 历史消息）；④ 意图路由模型 qwen-turbo → qwen-plus；⑤ api/schemas.py session_id → conversation_id；⑥ 版本号 0.2.0 → 0.3.0 | ✅ |
+| 2026-07-31 | Chrome DevTools E2E 测试 + Bug 修复：① passlib 与新版 bcrypt 不兼容 → 改用 bcrypt 直接调用；② Python getattr 急切求值导致 StructuredTool.__name__ 崩溃 → 改用 hasattr 判断；③ 前端 API_BASE 改为相对路径适配同源部署。全链路验证：登录/注册/多对话/SSE 流式/行程定制/删除对话/退出 均通过 | ✅ |
 

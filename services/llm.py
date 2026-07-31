@@ -398,7 +398,7 @@ def _langchain_tool_to_openai(tool) -> dict:
     return {
         "type": "function",
         "function": {
-            "name": getattr(tool, "name", tool.__name__),
+            "name": tool.name if hasattr(tool, "name") else getattr(tool, "__name__", "unknown"),
             "description": getattr(tool, "description", "") or "",
             "parameters": schema,
         },
