@@ -31,8 +31,10 @@
 | Agent 框架 | LangChain ≥ 0.3 | @tool 装饰器 + Tool 封装 |
 | Web 框架 | FastAPI ≥ 0.115 | 异步 API + 静态文件服务 |
 | LLM 调用 | httpx 直连百炼 | 零 langchain-openai 依赖，支持 async/await |
-| 路由模型 | 百炼 qwen-turbo | 意图识别（快速、低成本） |
+| 路由模型 | 百炼 qwen-plus | 意图识别（平衡速度与质量） |
 | 生成模型 | 百炼 qwen3-max | 行程生成、客服回复（强推理） |
+| 认证 | JWT (python-jose) + bcrypt | 最简用户名+密码登录 |
+| 前端 | 原生 HTML/CSS/JS（仿 DeepSeek） | 登录/多对话/SSE 流式输出 |
 | 多语言 | zh / en / ja / ko | 中文 + 英文 + 日文 + 韩文 |
 | Embedding | 百炼 text-embedding-v4 | 1024 维向量 |
 | 向量数据库 | Milvus 2.4（单机） | HNSW 索引 + COSINE 相似度 |
@@ -45,9 +47,11 @@
 
 ```
 Multi_Agent/
-├── api/                   # FastAPI 层（/chat 接口、请求模型、生命周期）
+├── api/                   # FastAPI 层（/chat 接口、请求模型、生命周期、认证）
 │   ├── main.py            # FastAPI app + /chat/stream + 启动/测试入口
-│   └── schemas.py
+│   ├── schemas.py         # 请求/响应 Pydantic 模型
+│   ├── auth.py            # 登录/注册 + JWT 签发
+│   └── dependencies.py    # get_current_user 依赖注入
 ├── graph/                 # LangGraph 编排层
 │   ├── state.py           # 全局共享 AgentState
 │   ├── builder.py         # 图构建与编译（四分支完整版）
@@ -85,18 +89,19 @@ Multi_Agent/
 │   ├── mock_crm.py        # CRM 客户记录写入
 │   └── mock_capi.py       # CAPI 转化事件发送
 ├── services/              # 基础设施
-│   ├── llm.py             # LLM 工厂（qwen-turbo + qwen3-max）
+│   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max）
 │   ├── embeddings.py      # Embedding（text-embedding-v4，DashScope 原生 API）
 │   ├── vector_store.py    # 向量存储（Milvus + HNSW 索引）
 │   ├── mysql.py           # MySQL 连接池（SQLAlchemy async）
 │   ├── redis.py           # Redis 缓存（会话历史 + 摘要）
-│   └── checkpoint.py      # MySQL Checkpoint Saver（LangGraph 持久化）
+│   ├── checkpoint.py      # MySQL Checkpoint Saver（LangGraph 持久化）
+│   └── user_store.py      # 用户/对话数据库操作
 ├── scripts/               # 运维脚本
 │   ├── knowledge_base.py  # 知识库文档定义（30 篇）
 │   ├── ingest_knowledge.py # 知识库摄入脚本（Milvus）
 │   └── migrate_mysql.sql  # MySQL 初始化 DDL
 ├── frontend/              # 前端页面
-│   └── index.html         # 聊天界面（原生 HTML/CSS/JS）
+│   └── index.html         # 聊天界面（仿 DeepSeek 布局 + 登录/多对话）
 ├── prompts/               # System Prompt 模板（5 个）
 │   ├── intent_router.txt
 │   ├── customer_service.txt
@@ -170,6 +175,24 @@ python -m api.main test --quick   # 快速模式（跳过行程生成）
 
 ## API 接口
 
+### 认证
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/auth/register` | 注册（`{username, password}` → `{user_id, token}`） |
+| `POST` | `/auth/login` | 登录（`{username, password}` → `{user_id, token, username}`） |
+
+> 注册规则：用户名 3-20 位字母数字，密码 ≥ 6 位。登录后获得 JWT token，有效期 24h。
+
+### 对话管理（需认证）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/conversations` | 获取当前用户的对话列表 |
+| `POST` | `/conversations` | 新建对话 |
+| `DELETE` | `/conversations/{id}` | 删除对话（同时清理 checkpoint） |
+| `GET` | `/conversations/{id}/messages` | 获取对话历史消息 |
+
 ### `GET /health`
 
 健康检查，返回各组件连接状态。
@@ -190,6 +213,8 @@ python -m api.main test --quick   # 快速模式（跳过行程生成）
 ### `POST /chat/stream`
 
 **流式对话接口**（SSE）—— 实时推送图节点执行进度，避免长时间等待"思考中"。
+
+> ⚠️ 所有 `/chat` 端点需要 `Authorization: Bearer <token>` 请求头。
 
 事件格式：
 ```
@@ -220,10 +245,9 @@ python -m api.main test --quick  # 快速模式 8 组
 
 ```json
 {
-  "session_id": "sess-001",
-  "customer_id": "cust-001",
-  "channel": "web",
+  "conversation_id": "conv-a1b2c3d4e5f6",
   "message": "我想去西安玩3天",
+  "channel": "web",
   "language": "zh"
 }
 ```

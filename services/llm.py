@@ -445,7 +445,7 @@ def get_router_llm() -> BailianLLM:
     global _router_llm
     if _router_llm is None:
         _router_llm = BailianLLM(
-            model=os.getenv("ROUTER_MODEL", "qwen-turbo"),
+            model=os.getenv("ROUTER_MODEL", "qwen-plus"),
             api_key=_get_api_key(),
             base_url=os.getenv("LLM_BASE_URL", BAILIAN_BASE_URL),
             temperature=float(os.getenv("ROUTER_TEMPERATURE", "0.3")),

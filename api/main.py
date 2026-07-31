@@ -5,7 +5,7 @@
     本地:    python main.py
 
 服务依赖：
-    - MySQL 8.0（会话持久化 + LangGraph Checkpoint）
+    - MySQL 8.0（会话持久化 + LangGraph Checkpoint + 用户/对话）
     - Redis 7（会话缓存 + 摘要缓存）
     - Milvus 单机（向量检索）
     - 阿里百炼（LLM + Embedding）
@@ -15,9 +15,10 @@ import os
 import sys
 import json
 import time
+import uuid
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -34,7 +35,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from api.schemas import ChatRequest, ChatResponse, TripDraftResponse
+from api.schemas import (
+    ChatRequest, ChatResponse, TripDraftResponse,
+    ConversationItem, CreateConversationRequest, CreateConversationResponse,
+)
+from api.dependencies import get_current_user
 from graph.builder import build_graph
 
 
@@ -73,11 +78,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Milvus 初始化失败（RAG 将回退到关键词匹配）: {e}")
 
-    # MySQL Checkpoint 表初始化
+    # MySQL 业务表初始化
     try:
         from services.mysql import get_engine
         engine = get_engine()
         from sqlalchemy import text
+
+        # LangGraph Checkpoint 表
         async with engine.begin() as conn:
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -105,12 +112,37 @@ async def lifespan(app: FastAPI):
                     PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """))
-        logger.info("MySQL checkpoint tables verified")
+
+        # 用户 + 对话表
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id     VARCHAR(64)  PRIMARY KEY COMMENT '用户唯一标识',
+                    username    VARCHAR(50)  NOT NULL UNIQUE COMMENT '用户名',
+                    password    VARCHAR(255) NOT NULL COMMENT 'bcrypt 密码哈希',
+                    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_username (username)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS conversations (
+                    conversation_id VARCHAR(64)  PRIMARY KEY COMMENT '对话唯一标识',
+                    user_id         VARCHAR(64)  NOT NULL COMMENT '所属用户',
+                    title           VARCHAR(200) NOT NULL DEFAULT '新对话',
+                    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                    INDEX idx_user (user_id),
+                    INDEX idx_updated (updated_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+
+        logger.info("MySQL business tables verified")
     except Exception as e:
-        logger.warning(f"Checkpoint 表初始化跳过: {e}")
+        logger.warning(f"业务表初始化跳过: {e}")
 
     logger.info("应用启动完成 ✓")
-    logger.info(f"  LLM Router:  {os.getenv('ROUTER_MODEL', 'qwen-turbo')}")
+    logger.info(f"  LLM Router:  {os.getenv('ROUTER_MODEL', 'qwen-plus')}")
     logger.info(f"  LLM Agent:   {os.getenv('AGENT_MODEL', 'qwen3-max')}")
     logger.info(f"  Embedding:   {os.getenv('EMBEDDING_MODEL', 'text-embedding-v4')}")
     logger.info(f"  Checkpoint:  {os.getenv('CHECKPOINT_BACKEND', 'mysql')}")
@@ -144,7 +176,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="入境定制游 AI Agent",
     description="基于 LangGraph 的多 Agent 旅游规划系统（阿里百炼 + Milvus + MySQL + Redis）",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -159,6 +191,10 @@ app.add_middleware(
 
 # 全局图实例（单例，通过 thread_id 隔离会话）
 _graph = build_graph()
+
+# 注册认证路由
+from api.auth import router as auth_router
+app.include_router(auth_router)
 
 
 # =============================================================================
@@ -181,7 +217,7 @@ async def root():
     index_path = os.path.join(_static_dir, "index.html")
     if os.path.isfile(index_path):
         return FileResponse(index_path)
-    return {"message": "前端页面未找到，请访问 /docs 查看 API 文档", "version": "0.2.0"}
+    return {"message": "前端页面未找到，请访问 /docs 查看 API 文档", "version": "0.3.0"}
 
 
 @app.get("/health")
@@ -189,7 +225,7 @@ async def health_check():
     """健康检查——返回各组件连接状态"""
     status = {
         "status": "ok",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "components": {
             "api": "ok",
         }
@@ -233,8 +269,95 @@ async def health_check():
     return status
 
 
+# =============================================================================
+# 对话管理（需认证）
+# =============================================================================
+
+
+@app.get("/conversations", response_model=list[ConversationItem])
+async def list_conversations(user: dict = Depends(get_current_user)):
+    """获取当前用户的所有对话，按更新时间倒序"""
+    from services.user_store import UserStore
+    store = UserStore()
+    return await store.list_conversations(user["user_id"])
+
+
+@app.post("/conversations", response_model=CreateConversationResponse)
+async def create_conversation(
+    req: CreateConversationRequest,
+    user: dict = Depends(get_current_user),
+):
+    """新建对话"""
+    from services.user_store import UserStore
+    store = UserStore()
+    conv_id = f"conv-{uuid.uuid4().hex[:12]}"
+    await store.create_conversation(conv_id, user["user_id"], req.title)
+    logger.info(f"Conversation created: {conv_id} by {user['username']}")
+    return CreateConversationResponse(conversation_id=conv_id, title=req.title)
+
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """删除对话（仅所有者可操作）"""
+    from services.user_store import UserStore
+    store = UserStore()
+    deleted = await store.delete_conversation(conversation_id, user["user_id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="对话不存在或无权删除")
+
+    # 同时清理 LangGraph checkpoint
+    try:
+        _graph.checkpointer.delete_thread(conversation_id)
+    except Exception:
+        pass
+
+    return {"ok": True}
+
+
+@app.get("/conversations/{conversation_id}/messages")
+async def get_messages(
+    conversation_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """获取对话历史消息（从 LangGraph checkpoint 读取）"""
+    from services.user_store import UserStore
+    store = UserStore()
+    conv = await store.get_conversation(conversation_id)
+    if not conv or conv["user_id"] != user["user_id"]:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    # 从 LangGraph checkpoint 加载状态
+    try:
+        config = {"configurable": {"thread_id": conversation_id}}
+        state = await _graph.aget_state(config)
+        if state and state.values:
+            messages = state.values.get("messages", [])
+            return {
+                "conversation_id": conversation_id,
+                "messages": [
+                    {
+                        "role": "user" if getattr(m, "type", "") == "human" else "agent",
+                        "content": getattr(m, "content", ""),
+                    }
+                    for m in messages
+                ],
+            }
+    except Exception:
+        pass
+
+    return {"conversation_id": conversation_id, "messages": []}
+
+
+# =============================================================================
+# 核心对话接口（需认证）
+# =============================================================================
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """核心对话接口
 
     接收用户消息，通过 LangGraph 多 Agent 图处理，
@@ -243,16 +366,27 @@ async def chat(req: ChatRequest):
     try:
         initial_state = {
             "messages": [HumanMessage(content=req.message)],
-            "session_id": req.session_id,
-            "customer_id": req.customer_id,
+            "session_id": req.conversation_id,
+            "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
         }
 
         result = await _graph.ainvoke(
             initial_state,
-            config={"configurable": {"thread_id": req.session_id}},
+            config={"configurable": {"thread_id": req.conversation_id}},
         )
+
+        # 自动更新对话标题（取用户消息前 30 字）
+        try:
+            from services.user_store import UserStore
+            store = UserStore()
+            conv = await store.get_conversation(req.conversation_id)
+            if conv and conv.get("title") == "新对话":
+                title = req.message[:30].replace("\n", " ")
+                await store.update_conversation_title(req.conversation_id, title)
+        except Exception:
+            pass
 
         # 行程草案
         draft = result.get("draft", {}) or {}
@@ -301,11 +435,11 @@ NODE_LABELS: dict[str, str] = {
 
 
 # =============================================================================
-# SSE 流式对话接口
+# SSE 流式对话接口（需认证）
 # =============================================================================
 
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     """流式对话接口——SSE 实时推送图节点执行进度 + 最终结果
 
     相比 /chat，本端点通过 text/event-stream 在 LangGraph
@@ -321,17 +455,28 @@ async def chat_stream(req: ChatRequest):
     async def _event_stream():
         initial_state = {
             "messages": [HumanMessage(content=req.message)],
-            "session_id": req.session_id,
-            "customer_id": req.customer_id,
+            "session_id": req.conversation_id,
+            "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
         }
 
         try:
+            # 自动更新对话标题
+            try:
+                from services.user_store import UserStore
+                store = UserStore()
+                conv = await store.get_conversation(req.conversation_id)
+                if conv and conv.get("title") == "新对话":
+                    title = req.message[:30].replace("\n", " ")
+                    await store.update_conversation_title(req.conversation_id, title)
+            except Exception:
+                pass
+
             final_state = None
             async for event in _graph.astream(
                 initial_state,
-                config={"configurable": {"thread_id": req.session_id}},
+                config={"configurable": {"thread_id": req.conversation_id}},
                 stream_mode="updates",
             ):
                 for node_name, node_output in event.items():

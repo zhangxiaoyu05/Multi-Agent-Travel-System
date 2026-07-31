@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-07-30
+> 最后更新：2026-07-31
 
 ---
 
@@ -17,7 +17,7 @@
 | 编排引擎 | LangGraph ≥ 0.2 | 图结构、State 管理、Checkpoint |
 | Agent 框架 | LangChain ≥ 0.3 | Agent 抽象、Tool 封装 |
 | Web 框架 | FastAPI ≥ 0.115 | /chat 接口 |
-| LLM 路由 | 百炼 qwen-turbo | 意图识别（快速、低成本） |
+| LLM 路由 | 百炼 qwen-plus | 意图识别（平衡速度与质量） |
 | LLM 生成 | 百炼 qwen3-max | 行程生成、客服回复（强推理） |
 | Embedding | 百炼 text-embedding-v4 | 1024 维向量 |
 | 向量数据库 | Milvus 2.4 单机 | HNSW 索引 + COSINE 相似度 |
@@ -529,4 +529,5 @@ event: error           → {"message":"..."}
 | 2026-07-31 | 测试补齐：新增 6 个测试文件（conftest + state + graph + router + customer_service + trip_planner），107 个用例全部通过，覆盖条件边/工具/节点/State/图结构 | ✅ |
 | 2026-07-31 | 架构优化：① 去 langchain-openai 依赖，改用 httpx 直连百炼（BailianLLM，~350 行）；② Agent 全异步化（async run + llm.ainvoke）；③ Tool-calling 样板代码提取到 BaseAgent._run_tool_calling_loop()，3 个 Agent 从 ~90 行缩减到 ~30 行；④ 多语言支持（zh/en/ja/ko），语言指令注入 + 前端语言选择器 | ✅ |
 | 2026-07-31 | 测试补全：新增 test_sales.py（21 用例）+ test_operations.py（14 用例），总测试数 142 个全部通过（~6s）。AsyncMock 适配异步节点 | ✅ |
+| 2026-07-31 | 前端重构 + 登录 + 模型升级：① 前端仿 DeepSeek 布局（侧边栏对话列表 + 多对话窗口 + 注册/登录/退出），丢弃快速测试面板；② 新增认证系统（JWT + bcrypt，3 个新文件：api/auth.py、api/dependencies.py、services/user_store.py）；③ 新增对话管理 API（CRUD + 历史消息）；④ 意图路由模型 qwen-turbo → qwen-plus；⑤ api/schemas.py session_id → conversation_id；⑥ 版本号 0.2.0 → 0.3.0 | ✅ |
 

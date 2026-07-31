@@ -68,3 +68,33 @@ CREATE TABLE IF NOT EXISTS sessions (
     INDEX idx_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='会话记录——每次客户接入的基本信息与业务状态';
+
+
+-- =============================================================================
+-- 用户表
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id     VARCHAR(64)  PRIMARY KEY COMMENT '用户唯一标识 (UUID)',
+    username    VARCHAR(50)  NOT NULL UNIQUE COMMENT '用户名',
+    password    VARCHAR(255) NOT NULL COMMENT 'bcrypt 密码哈希',
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
+    INDEX idx_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户表——最简认证';
+
+-- =============================================================================
+-- 对话表
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS conversations (
+    conversation_id VARCHAR(64)  PRIMARY KEY COMMENT '对话唯一标识',
+    user_id         VARCHAR(64)  NOT NULL COMMENT '所属用户',
+    title           VARCHAR(200) NOT NULL DEFAULT '新对话' COMMENT '对话标题',
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后活跃时间',
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    INDEX idx_user (user_id),
+    INDEX idx_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='对话列表——每个用户可有多个对话';
