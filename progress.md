@@ -525,4 +525,6 @@ event: error           → {"message":"..."}
 | 2026-07-30 | Phase 8：基础设施升级——模型升级 qwen3-max + embedding-v4，Milvus 向量库，MySQL 8.0 + Redis 7，Docker 全容器化（6 服务），MySQL Checkpoint Saver，static→frontend 重命名 | ✅ |
 | 2026-07-30 | Phase 8 调试：Docker 启动修复（MinIO 健康检查、端口冲突、MySQL DDL 主键长度），向量存储改为 Milvus REST + JSON 双模式，移除 pymilvus 依赖，全链路验证通过 | ✅ |
 | 2026-07-30 | Phase 9：SSE 流式输出——新增 `/chat/stream` 端点 + LangGraph astream(updates) + 前端 SSE reader + 进度 UI + `/chat` 降级回退，零 Agent 侵入 | ✅ |
+| 2026-07-31 | 工程优化：合并 main.py → api/main.py（统一入口，保留 test 模式）；.env 同步 .env.example（补齐 18 个缺失配置项，AGENT_MODEL 更新为 qwen3-max） | ✅ |
+| 2026-07-31 | 测试补齐：新增 6 个测试文件（conftest + state + graph + router + customer_service + trip_planner），107 个用例全部通过，覆盖条件边/工具/节点/State/图结构 | ✅ |
 

@@ -44,7 +44,7 @@
 ```
 Multi_Agent/
 ├── api/                   # FastAPI 层（/chat 接口、请求模型、生命周期）
-│   ├── main.py
+│   ├── main.py            # FastAPI app + /chat/stream + 启动/测试入口
 │   └── schemas.py
 ├── graph/                 # LangGraph 编排层
 │   ├── state.py           # 全局共享 AgentState
@@ -101,11 +101,17 @@ Multi_Agent/
 │   ├── trip_planner.txt
 │   ├── sales_agent.txt
 │   └── operations_agent.txt
-├── tests/                 # 测试
+├── tests/                 # 单元测试（107 个用例）
+│   ├── conftest.py
+│   ├── test_state.py
+│   ├── test_graph.py
+│   ├── test_router.py
+│   ├── test_customer_service.py
+│   └── test_trip_planner.py
 ├── docker-compose.yml     # Docker Compose 编排（6 个服务）
 ├── Dockerfile
 ├── requirements.txt
-└── main.py                # 本地快速启动（12 组测试）
+└── .env.example          # 环境变量模板
 ```
 
 ## 快速开始
@@ -150,7 +156,11 @@ export MILVUS_HOST=localhost
 pip install -r requirements.txt
 
 # 启动服务
-python main.py
+python -m api.main
+
+# 或运行测试
+python -m api.main test
+python -m api.main test --quick   # 快速模式（跳过行程生成）
 ```
 
 ## API 接口
@@ -185,6 +195,17 @@ event: done            → {完整 ChatResponse}
 ```
 
 > `/chat/stream` 暂不可用时前端自动降级回退到 `/chat` 普通 JSON 模式。
+
+## 测试
+
+```bash
+# 运行全部 107 个单元测试（~7s）
+python -m pytest tests/ -v
+
+# 运行端到端集成测试
+python -m api.main test          # 全量 12 组
+python -m api.main test --quick  # 快速模式 8 组
+```
 
 ### `POST /chat`
 
