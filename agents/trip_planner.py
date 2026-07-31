@@ -1,11 +1,9 @@
-"""定制 Agent——需求采集 + 行程草案生成
+"""定制 Agent——需求采集 + 行程草案生成（异步版）
 
-TripPlannerAgent 是系统中最复杂的 Agent，负责：
-1. 从用户消息中提取出行需求字段（destination, days, date, pax, budget 等）
-2. 检查必填项是否齐全，不全则追问
-3. 调用天气、日历、库存工具获取实时数据
-4. 基于数据生成 Markdown 格式的详细行程草案
-5. 支持多轮修订——根据用户反馈重新生成行程
+TripPlannerAgent 不套用标准 tool-calling 循环，原因：
+1. 需求提取走 regex + LLM 双通道
+2. 工具调用是强制性的（每次都查天气/日历/库存）
+3. 行程生成 prompt 是动态构建的
 """
 
 import re
@@ -16,11 +14,11 @@ from tools.mock_weather import get_weather
 from tools.mock_calendar import query_calendar
 from tools.mock_inventory import query_inventory
 from services.llm import get_agent_llm, get_router_llm
-from prompts import load_prompt
+from prompts import load_prompt, get_language_instruction
 
 
 # =============================================================================
-# 必填项定义
+# 常量
 # =============================================================================
 
 REQUIRED_FIELDS = ["destination", "days", "arrival_date", "pax", "budget"]
@@ -36,12 +34,6 @@ FIELD_CN_NAMES = {
     "special_requests": "特殊需求（如素食、轮椅、带小孩等）",
 }
 
-
-# =============================================================================
-# Regex 快速提取（优化：避免 LLM 调用解析简单字段）
-# =============================================================================
-
-# 预定义目的地城市列表
 _CITIES = [
     "北京", "西安", "上海", "成都", "广州", "桂林", "杭州", "重庆",
     "昆明", "拉萨", "哈尔滨", "三亚", "深圳", "南京", "武汉", "苏州",
@@ -49,14 +41,12 @@ _CITIES = [
     "长沙", "贵阳", "乌鲁木齐", "呼和浩特", "西宁", "兰州", "银川", "南宁",
 ]
 
-# 主题关键词映射
 _THEME_MAP = {
     "历史": "历史文化", "文化": "历史文化", "古迹": "历史文化",
     "自然": "自然风光", "风景": "自然风光", "山水": "自然风光",
     "美食": "美食", "吃": "美食", "小吃": "美食",
 }
 
-# 节奏关键词映射
 _PACE_MAP = {
     "轻松": "轻松", "休闲": "轻松", "慢": "轻松",
     "适中": "适中", "中等": "适中", "适度": "适中",
@@ -64,34 +54,31 @@ _PACE_MAP = {
 }
 
 
+# =============================================================================
+# Regex 快速提取（<1ms, 无 LLM 调用）
+# =============================================================================
+
 def _extract_fields_regex(user_msg: str) -> dict:
-    """用正则 + 关键词从用户消息中快速提取行程需求字段
-
-    在 <1ms 内完成，免除 1 次 LLM 调用。
-    只提取明确匹配的字段，不猜测。
-
-    Returns:
-        dict 包含提取到的字段（未匹配的字段不出现在 dict 中）
-    """
+    """正则 + 关键词快速提取行程字段"""
     extracted: dict = {}
 
-    # ---- 目的地：城市列表匹配 ----
+    # 目的地
     for city in _CITIES:
         if city in user_msg:
             extracted["destination"] = city
             break
 
-    # ---- 天数：X天 / X日 ----
+    # 天数
     m = re.search(r'(\d+)\s*[天日]', user_msg)
     if m:
         extracted["days"] = int(m.group(1))
 
-    # ---- 人数：X人 / X个 / X位 ----
+    # 人数
     m = re.search(r'(\d+)\s*[人个位]', user_msg)
     if m:
         extracted["pax"] = int(m.group(1))
 
-    # ---- 日期：优先匹配完整日期，再匹配 "M月D日/号" ----
+    # 日期
     m = re.search(r'(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})[日号]?', user_msg)
     if m:
         extracted["arrival_date"] = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
@@ -100,7 +87,7 @@ def _extract_fields_regex(user_msg: str) -> dict:
         if m:
             extracted["arrival_date"] = f"2026-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
 
-    # ---- 预算：$X / ¥X / X美元 / X元 ----
+    # 预算
     m = re.search(r'[¥\$]\s*(\d[\d,]*)', user_msg)
     if m:
         extracted["budget"] = f"${m.group(1)}"
@@ -117,19 +104,19 @@ def _extract_fields_regex(user_msg: str) -> dict:
                 if m:
                     extracted["budget"] = f"¥{m.group(1)}"
 
-    # ---- 主题：关键词匹配 ----
+    # 主题
     for keyword, theme in _THEME_MAP.items():
         if keyword in user_msg:
             extracted["theme"] = theme
             break
 
-    # ---- 节奏：关键词匹配 ----
+    # 节奏
     for keyword, pace in _PACE_MAP.items():
         if keyword in user_msg:
             extracted["pace"] = pace
             break
 
-    # ---- 特殊需求 ----
+    # 特殊需求
     if "素食" in user_msg or "吃素" in user_msg:
         extracted["special_requests"] = "素食需求"
     if "轮椅" in user_msg:
@@ -143,7 +130,7 @@ def _extract_fields_regex(user_msg: str) -> dict:
 
 
 # =============================================================================
-# 需求提取 Schema
+# LLM 需求提取 Schema
 # =============================================================================
 
 class NeedExtract(BaseModel):
@@ -163,11 +150,7 @@ class NeedExtract(BaseModel):
 # =============================================================================
 
 class TripPlannerAgent(BaseAgent):
-    """定制 Agent
-
-    使用 qwen-plus 做需求提取和行程生成。
-    tools 中包含 weather/calendar/inventory 三个数据查询工具。
-    """
+    """定制 Agent——需求提取 + 工具调用 + 行程生成"""
 
     def __init__(self):
         llm = get_agent_llm()
@@ -175,22 +158,10 @@ class TripPlannerAgent(BaseAgent):
         system_prompt = load_prompt("trip_planner.txt")
         super().__init__(llm=llm, tools=tools, system_prompt=system_prompt)
 
-    def run(self, state: AgentState) -> dict:
-        """执行定制逻辑
-
-        流程：
-        1. 从用户消息中提取出行需求字段
-        2. 与 checkpoint 中已有的 need 合并
-        3. 检查必填项 → 缺失则生成追问
-        4. 齐全则调用 tools → LLM 生成行程草案
-
-        Args:
-            state: 当前 AgentState
-
-        Returns:
-            dict 包含 need, draft, final_reply
-        """
+    async def run(self, state: AgentState) -> dict:
         user_msg = self._get_user_message(state)
+        language = self._get_language(state)
+        lang_instr = get_language_instruction(language)
         raw_need = state.get("need")
         existing_need = raw_need if raw_need else {}
         revision_count = state.get("revision_count", 0)
@@ -202,7 +173,6 @@ class TripPlannerAgent(BaseAgent):
             }
 
         # Step 1: 提取需求字段
-        # 优化：修订模式下跳过字段提取（用户消息是反馈而非新的行程需求）
         if revision_count > 0:
             merged_need = existing_need
         else:
@@ -211,11 +181,10 @@ class TripPlannerAgent(BaseAgent):
 
         # Step 2: 检查必填项
         missing = [f for f in REQUIRED_FIELDS if not merged_need.get(f)]
-
         if missing:
             return self._ask_missing_fields(missing, merged_need)
 
-        # Step 3: 必填项齐全 → 调用工具获取数据
+        # Step 3: 调用工具（同步，因为 Mock 工具是同步的）
         weather_info = get_weather.invoke({
             "city": merged_need["destination"],
             "date": merged_need["arrival_date"],
@@ -229,7 +198,7 @@ class TripPlannerAgent(BaseAgent):
             "pax": merged_need["pax"],
         })
 
-        # Step 4: 构建生成提示词
+        # Step 4: 异步生成行程草案
         revision_note = ""
         if revision_count > 0:
             revision_note = (
@@ -264,8 +233,8 @@ class TripPlannerAgent(BaseAgent):
 
 请生成完整的 Markdown 格式行程草案。
 """
-        response = self.llm.invoke([
-            {"role": "system", "content": self.system_prompt},
+        response = await self.llm.ainvoke([
+            {"role": "system", "content": self.system_prompt + lang_instr},
             {"role": "user", "content": generation_prompt},
         ])
 
@@ -289,28 +258,19 @@ class TripPlannerAgent(BaseAgent):
     # =========================================================================
 
     def _extract_fields(self, user_msg: str, existing_need: dict) -> dict:
-        """从用户消息中提取出行需求字段
-
-        优化策略：先用 regex 快速提取（<1ms），
-        如果必填项全部匹配则直接返回，否则走 LLM 兜底。
-
-        只提取用户明确提到的信息，不猜测。
-        """
-        # Step 1: Regex 快速提取
+        """Regex + LLM 双通道提取需求字段"""
         regex_extracted = _extract_fields_regex(user_msg)
 
-        # Step 2: 检查必填项是否全部被 regex 覆盖
+        # 检查 regex 是否已覆盖所有缺失的必填项
         regex_keys = set(regex_extracted.keys())
         required_set = set(REQUIRED_FIELDS)
         existing_set = {k for k, v in existing_need.items() if v}
-
-        # 如果 regex 已覆盖所有当前缺失的必填项，直接返回（跳过 LLM）
         still_missing = required_set - existing_set - regex_keys
+
         if not still_missing:
             return regex_extracted
 
-        # Step 3: Regex 不完整 → LLM 兜底提取
-        # 使用 router LLM（轻量）做结构化提取
+        # LLM 兜底
         router_llm = get_router_llm()
         structured_llm = router_llm.with_structured_output(NeedExtract)
 
@@ -337,30 +297,24 @@ class TripPlannerAgent(BaseAgent):
                 {"role": "user", "content": user_msg},
             ])
 
-            # 合并：regex 结果优先，LLM 补充缺失字段
             llm_extracted = {}
             for field, value in result.model_dump().items():
                 if value is not None:
                     llm_extracted[field] = value
 
-            # regex 结果更可靠（精确匹配），LLM 作为补充
-            merged = {**llm_extracted, **regex_extracted}
-            return merged
+            return {**llm_extracted, **regex_extracted}
 
         except Exception:
-            # LLM 也失败了 → 只返回 regex 结果
             return regex_extracted
 
     def _ask_missing_fields(self, missing: list, need: dict) -> dict:
-        """生成友好的追问消息，引导用户补充缺失信息"""
         missing_cn = [FIELD_CN_NAMES.get(f, f) for f in missing]
 
         lines = ["好的！还差一点点信息就能为您生成专属行程了：\n"]
         for i, field_name in enumerate(missing_cn, 1):
             lines.append(f"{i}. **{field_name}**")
 
-        lines.append(f"\n请直接回复我这些信息就好~")
-        # 如果已有部分信息，展示已收集的内容
+        lines.append("\n请直接回复我这些信息就好~")
         filled = {k: v for k, v in need.items() if v}
         if filled:
             lines.append("\n已确认的信息：")
@@ -375,12 +329,10 @@ class TripPlannerAgent(BaseAgent):
         }
 
 
-# 模块级单例
 _agent_instance: TripPlannerAgent | None = None
 
 
 def get_trip_planner_agent() -> TripPlannerAgent:
-    """获取定制 Agent 单例"""
     global _agent_instance
     if _agent_instance is None:
         _agent_instance = TripPlannerAgent()

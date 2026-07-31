@@ -4,7 +4,7 @@
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # =============================================================================
@@ -218,35 +218,35 @@ class TestTripPlannerNode:
     """定制节点——Mock TripPlannerAgent"""
 
     @patch("graph.nodes.trip_planner.get_trip_planner_agent")
-    def test_node_calls_agent(self, mock_get_agent, planner_state):
+    async def test_node_calls_agent(self, mock_get_agent, planner_state):
         """节点应调用 Agent.run() 并返回结果"""
         mock_agent = MagicMock()
-        mock_agent.run.return_value = {
+        mock_agent.run = AsyncMock(return_value={
             "final_reply": "已为您生成西安四日游行程",
             "need": planner_state["need"],
             "draft": {"version": 1, "itinerary_md": "# 西安四日游..."},
-        }
+        })
         mock_get_agent.return_value = mock_agent
 
         from graph.nodes.trip_planner import trip_planner
-        result = trip_planner(planner_state)
+        result = await trip_planner(planner_state)
 
         mock_agent.run.assert_called_once()
         assert "final_reply" in result
 
     @patch("graph.nodes.trip_planner.get_trip_planner_agent")
-    def test_node_returns_need_and_draft(self, mock_get_agent, planner_state):
+    async def test_node_returns_need_and_draft(self, mock_get_agent, planner_state):
         """成功生成后应同时返回 need 和 draft"""
         mock_agent = MagicMock()
-        mock_agent.run.return_value = {
+        mock_agent.run = AsyncMock(return_value={
             "final_reply": "行程已生成",
             "need": planner_state["need"],
             "draft": {"version": 1, "itinerary_md": "# 行程"},
-        }
+        })
         mock_get_agent.return_value = mock_agent
 
         from graph.nodes.trip_planner import trip_planner
-        result = trip_planner(planner_state)
+        result = await trip_planner(planner_state)
 
         assert "need" in result
         assert "draft" in result

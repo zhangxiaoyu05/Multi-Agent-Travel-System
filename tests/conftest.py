@@ -1,8 +1,9 @@
-"""pytest 共享 fixtures
+"""pytest 共享 fixtures（异步版）
 
 为所有测试模块提供可复用的测试状态和 Mock 对象。
 """
 
+import asyncio
 import pytest
 from unittest.mock import MagicMock, patch
 from langchain_core.messages import HumanMessage, AIMessage
@@ -15,7 +16,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 @pytest.fixture
 def base_state() -> dict:
-    """最简初始状态——模拟 /chat 请求注入的 State"""
+    """最简初始状态"""
     return {
         "messages": [HumanMessage(content="你好")],
         "session_id": "test-session-01",
@@ -27,7 +28,7 @@ def base_state() -> dict:
 
 @pytest.fixture
 def planner_state() -> dict:
-    """模拟定制流程中的 State——已提取部分需求"""
+    """定制流程状态——已提取部分需求"""
     return {
         "messages": [HumanMessage(content="我想去西安玩4天，8月20号到，2个人，预算每人1500美元")],
         "session_id": "test-session-02",
@@ -48,7 +49,7 @@ def planner_state() -> dict:
 
 @pytest.fixture
 def complaint_state() -> dict:
-    """模拟投诉场景的 State"""
+    """投诉场景状态"""
     return {
         "messages": [HumanMessage(content="我要投诉，导游完全不专业！我要退款！")],
         "session_id": "test-session-03",
@@ -60,7 +61,7 @@ def complaint_state() -> dict:
 
 @pytest.fixture
 def state_with_draft() -> dict:
-    """模拟已有行程草案的 State——准备进行意向评分"""
+    """已有行程草案的状态"""
     return {
         "messages": [HumanMessage(content="行程看起来不错，但我还想加点美食推荐")],
         "session_id": "test-session-04",
@@ -83,6 +84,40 @@ def state_with_draft() -> dict:
     }
 
 
+@pytest.fixture
+def sales_state() -> dict:
+    """销售咨询场景状态"""
+    return {
+        "messages": [HumanMessage(content="我想去三亚玩5天，2个人，每人预算2000美元，能报个价吗？")],
+        "session_id": "test-sales-01",
+        "customer_id": "cust-sales-01",
+        "channel": "web",
+        "language": "zh",
+        "need": {
+            "destination": "三亚",
+            "days": 5,
+            "pax": 2,
+            "budget": "$2000",
+        },
+        "intent_scores": {"service": 0.05, "sales": 0.85, "operations": 0.05, "planner": 0.05},
+        "current_branch": "sales",
+    }
+
+
+@pytest.fixture
+def operations_state() -> dict:
+    """运营咨询场景状态"""
+    return {
+        "messages": [HumanMessage(content="我是旅行社的，想在你们平台上架产品，需要什么资质？")],
+        "session_id": "test-ops-01",
+        "customer_id": "cust-ops-01",
+        "channel": "web",
+        "language": "zh",
+        "intent_scores": {"service": 0.1, "sales": 0.0, "operations": 0.85, "planner": 0.05},
+        "current_branch": "operations",
+    }
+
+
 # =============================================================================
 # Mock fixtures
 # =============================================================================
@@ -101,13 +136,43 @@ def mock_llm_response():
 
 @pytest.fixture
 def mock_router_llm():
-    """Mock 意图路由器 LLM，返回预定义结果"""
+    """Mock get_router_llm 返回 BailianLLM"""
     with patch("graph.nodes.intent_router.get_router_llm") as mock_llm:
         yield mock_llm
 
 
 @pytest.fixture
 def mock_agent_llm():
-    """Mock Agent LLM，返回预定义结果"""
+    """Mock get_agent_llm 返回 BailianLLM"""
     with patch("services.llm.get_agent_llm") as mock_llm:
         yield mock_llm
+
+
+# =============================================================================
+# Utility helpers
+# =============================================================================
+
+
+def make_mock_agent(return_value: dict) -> MagicMock:
+    """创建带 async run() 方法的 Mock Agent。
+
+    Usage:
+        mock_agent = make_mock_agent({"final_reply": "回复", "need_human": False})
+        mock_get_agent.return_value = mock_agent
+    """
+    from unittest.mock import AsyncMock
+    mock = MagicMock()
+    mock.run = AsyncMock(return_value=return_value)
+    return mock
+
+
+def run_async(coro):
+    """Helper: 在同步测试中运行异步节点函数"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()

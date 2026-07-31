@@ -1,13 +1,10 @@
 """运营 Agent——商家入驻 + 订单履约 + 售后工单
 
-OperationsAgent 负责处理运营类用户消息：
-1. 商家入驻流程引导
-2. 订单履约跟踪与协调
-3. 售后工单处理（改期/退订/投诉）
-4. 平台规则咨询
-5. 所有操作写入 CRM + 发送 CAPI 事件
+使用 BaseAgent 内置的 _run_tool_calling_loop 处理标准 tool-calling 流程。
+所有操作强制 CRM 记录。
 """
 
+import json
 from agents.base import BaseAgent
 from graph.state import AgentState
 from tools.mock_crm import update_crm
@@ -15,16 +12,9 @@ from tools.mock_capi import send_capi
 from services.llm import get_agent_llm
 from prompts import load_prompt
 
-import json
-
 
 class OperationsAgent(BaseAgent):
-    """运营 Agent
-
-    使用 LLM + Tools 模式处理运营任务。
-    tools 中包含 update_crm 和 send_capi。
-    所有操作必须记录到 CRM。
-    """
+    """运营 Agent——CRM + CAPI + 工单处理"""
 
     def __init__(self):
         llm = get_agent_llm()
@@ -32,22 +22,9 @@ class OperationsAgent(BaseAgent):
         system_prompt = load_prompt("operations_agent.txt")
         super().__init__(llm=llm, tools=tools, system_prompt=system_prompt)
 
-    def run(self, state: AgentState) -> dict:
-        """处理运营任务
-
-        流程：
-        1. 提取用户消息和会话上下文
-        2. LLM 分析运营诉求
-        3. 根据需要调用 update_crm / send_capi
-        4. 生成可执行的回复
-
-        Args:
-            state: 当前 AgentState
-
-        Returns:
-            dict 包含 final_reply, need_human, crm_written
-        """
+    async def run(self, state: AgentState) -> dict:
         user_msg = self._get_user_message(state)
+        language = self._get_language(state)
         customer_id = state.get("customer_id", "unknown")
 
         if not user_msg:
@@ -56,62 +33,13 @@ class OperationsAgent(BaseAgent):
                 "need_human": False,
             }
 
-        # Step 1: LLM 决策 —— 调用工具或直接回复
-        llm_with_tools = self.llm.bind_tools(self.tools)
+        # 标准 tool-calling 循环
+        loop_result = await self._run_tool_calling_loop(user_msg, language=language)
+        final_text = loop_result["final_text"]
+        need_human = loop_result["need_human"]
+        crm_result = loop_result["tool_results"].get("update_crm", "")
 
-        response = llm_with_tools.invoke([
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_msg},
-        ])
-
-        # Step 2: 处理工具调用
-        need_human = False
-        crm_result = ""
-        capi_result = ""
-
-        if hasattr(response, "tool_calls") and response.tool_calls:
-            for tc in response.tool_calls:
-                tool_name = tc.get("name", "")
-                tool_args = tc.get("args", {})
-
-                if tool_name == "update_crm":
-                    crm_result = update_crm.invoke(tool_args)
-                elif tool_name == "send_capi":
-                    capi_result = send_capi.invoke(tool_args)
-
-        # Step 3: 如果调用了工具，把结果回传给 LLM 生成最终回复
-        if response.tool_calls:
-            tool_messages = []
-            for tc in response.tool_calls:
-                tool_name = tc.get("name", "")
-                if tool_name == "update_crm" and crm_result:
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": crm_result,
-                    })
-                elif tool_name == "send_capi" and capi_result:
-                    tool_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": capi_result,
-                    })
-
-            if tool_messages:
-                conversation = [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_msg},
-                    response,
-                ] + tool_messages
-
-                final_response = self.llm.invoke(conversation)
-                final_text = final_response.content
-            else:
-                final_text = response.content
-        else:
-            final_text = response.content
-
-        # Step 4: 检测严重投诉/需要转人工
+        # 升级关键词检测
         escalation_keywords = [
             "投诉", "退款", "骗人", "诈骗", "报警", "重大事故",
             "伤亡", "安全事故", "媒体曝光",
@@ -121,7 +49,7 @@ class OperationsAgent(BaseAgent):
                 need_human = True
                 break
 
-        # Step 5: 如果 LLM 没有调用 CRM，强制补充一条 CRM 记录
+        # 如果 LLM 未调用 CRM，强制补充一条记录
         if not crm_result:
             session_summary = json.dumps({
                 "customer_id": customer_id,
@@ -135,7 +63,7 @@ class OperationsAgent(BaseAgent):
                     "session_data": session_summary,
                 })
             except Exception:
-                pass  # Mock 阶段忽略
+                pass
 
         return {
             "final_reply": final_text,
@@ -143,12 +71,10 @@ class OperationsAgent(BaseAgent):
         }
 
 
-# 模块级单例
 _agent_instance: OperationsAgent | None = None
 
 
 def get_operations_agent() -> OperationsAgent:
-    """获取运营 Agent 单例"""
     global _agent_instance
     if _agent_instance is None:
         _agent_instance = OperationsAgent()

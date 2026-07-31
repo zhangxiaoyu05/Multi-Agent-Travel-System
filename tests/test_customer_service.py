@@ -4,7 +4,7 @@
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # =============================================================================
@@ -143,27 +143,27 @@ class TestCustomerServiceNode:
     """客服节点——Mock LLM 调用，验证返回结构和字段"""
 
     @patch("graph.nodes.customer_service.get_customer_service_agent")
-    def test_node_returns_reply(self, mock_get_agent, base_state):
+    async def test_node_returns_reply(self, mock_get_agent, base_state):
         """节点应返回 final_reply 文本"""
         mock_agent = MagicMock()
-        mock_agent.run.return_value = {"final_reply": "您好，这是关于签证的回答...", "need_human": False}
+        mock_agent.run = AsyncMock(return_value={"final_reply": "您好，这是关于签证的回答...", "need_human": False})
         mock_get_agent.return_value = mock_agent
 
         from graph.nodes.customer_service import customer_service
-        result = customer_service(base_state)
+        result = await customer_service(base_state)
 
         assert "final_reply" in result
         assert result["final_reply"] == "您好，这是关于签证的回答..."
 
     @patch("graph.nodes.customer_service.get_customer_service_agent")
-    def test_node_detects_complaint(self, mock_get_agent, complaint_state):
+    async def test_node_detects_complaint(self, mock_get_agent, complaint_state):
         """投诉消息应返回 need_human=True"""
         mock_agent = MagicMock()
-        mock_agent.run.return_value = {"final_reply": "正在转接人工", "need_human": True}
+        mock_agent.run = AsyncMock(return_value={"final_reply": "正在转接人工", "need_human": True})
         mock_get_agent.return_value = mock_agent
 
         from graph.nodes.customer_service import customer_service
-        result = customer_service(complaint_state)
+        result = await customer_service(complaint_state)
 
         assert result["need_human"] is True
 

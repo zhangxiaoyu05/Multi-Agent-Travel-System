@@ -28,10 +28,12 @@
 | 层级 | 技术 | 说明 |
 |------|------|------|
 | 编排引擎 | LangGraph ≥ 0.2 | StateGraph + 条件边 + Checkpoint |
-| Agent 框架 | LangChain ≥ 0.3 | bind_tools / with_structured_output |
+| Agent 框架 | LangChain ≥ 0.3 | @tool 装饰器 + Tool 封装 |
 | Web 框架 | FastAPI ≥ 0.115 | 异步 API + 静态文件服务 |
+| LLM 调用 | httpx 直连百炼 | 零 langchain-openai 依赖，支持 async/await |
 | 路由模型 | 百炼 qwen-turbo | 意图识别（快速、低成本） |
 | 生成模型 | 百炼 qwen3-max | 行程生成、客服回复（强推理） |
+| 多语言 | zh / en / ja / ko | 中文 + 英文 + 日文 + 韩文 |
 | Embedding | 百炼 text-embedding-v4 | 1024 维向量 |
 | 向量数据库 | Milvus 2.4（单机） | HNSW 索引 + COSINE 相似度 |
 | 关系数据库 | MySQL 8.0 | 会话存储 + LangGraph Checkpoint |
@@ -101,13 +103,16 @@ Multi_Agent/
 │   ├── trip_planner.txt
 │   ├── sales_agent.txt
 │   └── operations_agent.txt
-├── tests/                 # 单元测试（107 个用例）
+├── tests/                 # 单元测试（142 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
 │   ├── test_graph.py
 │   ├── test_router.py
 │   ├── test_customer_service.py
-│   └── test_trip_planner.py
+│   ├── test_trip_planner.py
+│   ├── test_sales.py
+│   └── test_operations.py
+├── pytest.ini             # pytest-asyncio 配置
 ├── docker-compose.yml     # Docker Compose 编排（6 个服务）
 ├── Dockerfile
 ├── requirements.txt
@@ -199,7 +204,7 @@ event: done            → {完整 ChatResponse}
 ## 测试
 
 ```bash
-# 运行全部 107 个单元测试（~7s）
+# 运行全部 142 个单元测试（~6s，含异步测试）
 python -m pytest tests/ -v
 
 # 运行端到端集成测试

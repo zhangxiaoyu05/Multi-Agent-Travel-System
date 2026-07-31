@@ -527,4 +527,6 @@ event: error           → {"message":"..."}
 | 2026-07-30 | Phase 9：SSE 流式输出——新增 `/chat/stream` 端点 + LangGraph astream(updates) + 前端 SSE reader + 进度 UI + `/chat` 降级回退，零 Agent 侵入 | ✅ |
 | 2026-07-31 | 工程优化：合并 main.py → api/main.py（统一入口，保留 test 模式）；.env 同步 .env.example（补齐 18 个缺失配置项，AGENT_MODEL 更新为 qwen3-max） | ✅ |
 | 2026-07-31 | 测试补齐：新增 6 个测试文件（conftest + state + graph + router + customer_service + trip_planner），107 个用例全部通过，覆盖条件边/工具/节点/State/图结构 | ✅ |
+| 2026-07-31 | 架构优化：① 去 langchain-openai 依赖，改用 httpx 直连百炼（BailianLLM，~350 行）；② Agent 全异步化（async run + llm.ainvoke）；③ Tool-calling 样板代码提取到 BaseAgent._run_tool_calling_loop()，3 个 Agent 从 ~90 行缩减到 ~30 行；④ 多语言支持（zh/en/ja/ko），语言指令注入 + 前端语言选择器 | ✅ |
+| 2026-07-31 | 测试补全：新增 test_sales.py（21 用例）+ test_operations.py（14 用例），总测试数 142 个全部通过（~6s）。AsyncMock 适配异步节点 | ✅ |
 
