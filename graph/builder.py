@@ -55,7 +55,7 @@ from graph.nodes.sales_agent import sales_agent
 from graph.nodes.operations_agent import operations_agent as ops_agent_node
 
 # Conditions
-from graph.conditions.route_decision import route_decision
+from graph.conditions.route_decision import route_decision_node, route_condition
 from graph.conditions.after_service import after_service
 from graph.conditions.requirements_complete import requirements_complete
 from graph.conditions.revision_decision import revision_decision
@@ -100,6 +100,7 @@ def build_graph(checkpointer=None):
     builder.add_node("input_guard", input_guard)
     builder.add_node("session_context", session_context)
     builder.add_node("intent_router", intent_router)
+    builder.add_node("route_decision", route_decision_node)  # v3: 拆分路由为节点+条件
 
     # Phase 3
     builder.add_node("customer_service", customer_service)
@@ -123,11 +124,12 @@ def build_graph(checkpointer=None):
     builder.add_edge(START, "input_guard")
     builder.add_edge("input_guard", "session_context")
     builder.add_edge("session_context", "intent_router")
+    builder.add_edge("intent_router", "route_decision")  # v3: 路由节点写 State
 
-    # 路由分发
+    # 路由分发（v3: route_condition 从 current_branch 读取，不做计算）
     builder.add_conditional_edges(
-        "intent_router",
-        route_decision,
+        "route_decision",
+        route_condition,
         {
             "customer_service": "customer_service",
             "sales_agent": "sales_agent",
@@ -143,7 +145,7 @@ def build_graph(checkpointer=None):
         after_service,
         {
             "human_handoff": "human_handoff",
-            "intent_router": "intent_router",
+            "intent_router": "route_decision",  # v3: 回到路由节点
             "end": END,
         }
     )

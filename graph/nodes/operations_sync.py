@@ -36,10 +36,15 @@ def operations_sync(state: AgentState) -> dict:
     need = state.get("need", {}) or {}
     draft = state.get("draft", {}) or {}
     revision_count = state.get("revision_count", 0)
+    handoff = state.get("handoff", {}) or {}
 
-    # ---- 确定事件类型 ----
+    # ---- 确定事件类型（v2: 优先用 handoff 上下文） ----
     if need_human:
-        event_type = "handoff"
+        reason = handoff.get("reason", "unknown")
+        if reason in ("complaint", "escalation"):
+            event_type = "escalation"
+        else:
+            event_type = "handoff"
     elif intent_level == "high" or next_action == "accept":
         event_type = "trip_confirmed"
     elif draft.get("itinerary_md"):
@@ -87,4 +92,10 @@ def operations_sync(state: AgentState) -> dict:
     # ---- 透传：不改变 final_reply ----
     return {
         "final_reply": state.get("final_reply", ""),
+        "agent_traces": [{
+            "agent": "operations_sync",
+            "action": "synced_to_crm_capi",
+            "outcome": f"event={event_type}, crm={crm_result[:50]}",
+            "confidence": "high",
+        }],
     }

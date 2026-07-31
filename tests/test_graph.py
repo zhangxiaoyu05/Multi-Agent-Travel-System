@@ -118,10 +118,15 @@ class TestEdgeStructure:
         )
 
     def test_intent_router_has_conditional_edges(self):
-        """intent_router 应有条件边分发到各业务分支"""
+        """v3: route_decision 节点应有条件边分发到各业务分支"""
         edges = self._edge_set()
-        out_edges = {e for e in edges if e[0] == "intent_router"}
-        assert len(out_edges) > 0, "intent_router 应有条件边"
+        # intent_router → route_decision 是固定边
+        assert ("intent_router", "route_decision") in edges, (
+            "intent_router 应有固定边 → route_decision"
+        )
+        # route_decision → 各业务分支是条件边
+        out_edges = {e for e in edges if e[0] == "route_decision"}
+        assert len(out_edges) > 0, "route_decision 应有条件边"
 
     def test_linear_chain_exists(self):
         """主干链路：input_guard → session_context → intent_router"""

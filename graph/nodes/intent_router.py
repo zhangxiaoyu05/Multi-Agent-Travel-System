@@ -92,6 +92,15 @@ def intent_router(state: AgentState) -> dict:
             need_human=False, reasoning="LLM error fallback",
         )
 
+    handoff = {}
+    if result.need_human:
+        handoff = {
+            "from_agent": "intent_router",
+            "reason": "user_request",
+            "priority": "urgent" if result.service > 0.7 else "normal",
+            "summary": f"用户消息被 LLM 判定为需转人工：{result.reasoning[:120]}",
+        }
+
     return {
         "intent_scores": {
             "service": result.service,
@@ -100,4 +109,13 @@ def intent_router(state: AgentState) -> dict:
             "planner": result.planner,
         },
         "need_human": result.need_human,
+        "handoff": handoff,
+        "agent_traces": [{
+            "agent": "intent_router",
+            "action": "classified",
+            "outcome": f"planner={result.planner:.2f}, service={result.service:.2f}",
+            "confidence": "high" if max(
+                result.service, result.sales, result.operations, result.planner
+            ) > 0.5 else "low",
+        }],
     }

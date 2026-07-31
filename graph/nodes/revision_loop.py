@@ -19,4 +19,13 @@ def revision_loop(state: AgentState) -> dict:
         dict 包含 revision_count 增量
     """
     current = state.get("revision_count", 0)
-    return {"revision_count": current + 1}
+    new_count = current + 1
+    return {
+        "revision_count": new_count,
+        "agent_traces": [{
+            "agent": "revision_loop",
+            "action": "incremented_revision",
+            "outcome": f"revision_{new_count}",
+            "confidence": "high",
+        }],
+    }

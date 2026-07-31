@@ -30,4 +30,8 @@ def session_context(state: AgentState) -> dict:
         "next_action": state.get("next_action", ""),
         "final_reply": state.get("final_reply", ""),
         "quote": state.get("quote", ""),
+        # 🆕 共享黑板 v2 新字段
+        "handoff": state.get("handoff", {}),
+        "agent_traces": state.get("agent_traces", []),
+        "branch_history": state.get("branch_history", []),
     }

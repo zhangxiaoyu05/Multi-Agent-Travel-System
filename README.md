@@ -7,21 +7,23 @@
 ## 架构概览
 
 ```
-用户消息 → input_guard → session_context → intent_router
-                                                │
-        ┌──────────────────┰────────────────────┼──────────────────────┐
-        ▼                  ▼                    ▼                      ▼
- customer_service      sales_agent         trip_planner           human_handoff
-  FAQ / 转人工         报价 / 签约         需求采集 / 草案            (人工接管)
-        │                  │             生成 / 修订循环                  │
-        ▼                  ▼                    │                        │
-   human_handoff     operations_sync    ────────┘                        │
-        │                  │                    │                        │
-        └──────────────────╋────────────────────┼────────────────────────│
-                           ▼                    ▼                        ▼
-                    operations_agent      operations_sync ←──────────────┘
+用户消息 → input_guard → session_context → intent_router → route_decision
+                                                                    │
+        ┌──────────────────┰────────────────────┼──────────────────────────┐
+        ▼                  ▼                    ▼                          ▼
+ customer_service      sales_agent         trip_planner               human_handoff
+  FAQ / 转人工         报价 / 签约         需求采集 / 草案                (人工接管)
+        │                  │             生成 / 修订循环                      │
+        ▼                  ▼                    │                            │
+   human_handoff     operations_sync    ────────┘                            │
+        │                  │                    │                            │
+        └──────────────────╋────────────────────┼────────────────────────────│
+                           ▼                    ▼                            ▼
+                    operations_agent      operations_sync ←──────────────────┘
                      入驻 / 履约 / 工单   (终态：CRM + CAPI)
 ```
+
+> 💡 **共享黑板**：所有节点共用 `AgentState`，字段有明确 owner。新增 `handoff`（转人工上下文）、`agent_traces`（追加式审计日志）、`branch_history`（路径追踪）。分支切换时自动重置控制信号防止跨分支污染。
 
 ## 技术栈
 
@@ -305,7 +307,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase | 内容 | 状态 |
 |-------|------|:---:|
 | Phase 0 | 项目骨架 + Docker 环境 | ✅ |
-| Phase 1-2 | State + 意图路由器（v2：对话历史 + 分支惯性偏向） | ✅ |
+| Phase 1-2 | State 共享黑板 v2（字段所有权契约 + HandoffContext + AgentTrace）+ 意图路由器 v3（路由节点+条件分离，分支切换信号重置） | ✅ |
 | Phase 3 | 客服 Agent + 人工接管 | ✅ |
 | Phase 4 | 定制 Agent + 修订循环 | ✅ |
 | Phase 5 | 终态写入 + /chat 联调 | ✅ |

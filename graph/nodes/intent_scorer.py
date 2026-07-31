@@ -73,7 +73,24 @@ def intent_scorer(state: AgentState) -> dict:
                 ),
             },
         ])
-        return _normalize_result(result, revision_count)
+        normalized = _normalize_result(result, revision_count)
+        return {
+            **normalized,
+            "agent_traces": [{
+                "agent": "intent_scorer",
+                "action": "scored_intent",
+                "outcome": f"level={normalized['intent_level']}, action={normalized['next_action']}",
+                "confidence": normalized["intent_level"],
+            }],
+        }
 
     except Exception:
-        return {"intent_level": "high", "next_action": "accept"}
+        return {
+            "intent_level": "high", "next_action": "accept",
+            "agent_traces": [{
+                "agent": "intent_scorer",
+                "action": "scored_intent",
+                "outcome": "fallback: high/accept",
+                "confidence": "low",
+            }],
+        }

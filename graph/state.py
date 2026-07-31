@@ -3,11 +3,39 @@
 这是整个系统的数据契约，所有节点共享同一个 State。
 继承 LangGraph 的 MessagesState（自带消息管理和 add_messages reducer），
 扩展业务字段。
+
+=== 字段所有权契约 ===
+| 字段 | 写入节点（owner） | 读取节点 |
+|------|-------------------|----------|
+| session_id/customer_id/channel/language | session_context | 所有 |
+| intent_scores | intent_router | route_decision, human_handoff |
+| current_branch | 各 Agent 节点 | route_decision, human_handoff |
+| need | trip_planner | trip_planner, human_handoff, operations_sync |
+| draft | trip_planner | intent_scorer, human_handoff, operations_sync |
+| revision_count | revision_loop | trip_planner, intent_scorer, revision_decision |
+| quote | sales_agent | human_handoff |
+| intent_level/next_action | intent_scorer(定制), sales_agent(销售) | revision_decision, after_sales |
+| need_human + handoff | 需转人工的 Agent | route_decision, human_handoff |
+| final_reply | 各 Agent | API 层 |
+| agent_traces | 所有 Agent（追加） | 调试/监控 |
+| branch_history | route_decision（追加） | 调试/分析 |
 """
 
-from typing import TypedDict, Optional, Annotated
-from langgraph.graph.message import add_messages
+from typing import TypedDict, Annotated
 from langgraph.graph import MessagesState
+
+
+# =============================================================================
+# 自定义 Reducer（追加不覆盖）
+# =============================================================================
+
+def _append_list(existing: list | None, new: list) -> list:
+    """合并列表——用于 agent_traces / branch_history 等追加型字段。
+
+    LangGraph 对每个 State 字段支持自定义 reducer。
+    这里实现 append-only：新值追加到现有列表末尾，不存在则创建。
+    """
+    return (existing or []) + new
 
 
 # =============================================================================
@@ -37,6 +65,25 @@ class TripDraft(TypedDict, total=False):
     weather_summary: str      # 天气摘要
 
 
+class HandoffContext(TypedDict, total=False):
+    """转人工交接上下文——解释为什么转、谁触发、紧急程度。
+
+    替代裸 need_human=True 判断，让 human_handoff 能够生成精准的交接单。
+    """
+    from_agent: str           # 触发转人工的来源 Agent
+    reason: str               # "complaint" | "escalation" | "give_up" | "user_request" | "faq_not_covered"
+    priority: str             # "normal" | "urgent"
+    summary: str              # 简短摘要（1-2 句话）
+
+
+class AgentTrace(TypedDict, total=False):
+    """单个 Agent 的执行审计记录——追加到 agent_traces 列表"""
+    agent: str                # "intent_router" | "trip_planner" | "customer_service" | ...
+    action: str               # "classified" | "generated_draft" | "answered_faq" | ...
+    outcome: str              # "routed_to_planner" | "draft_v2_generated" | ...
+    confidence: str           # "high" | "mid" | "low"
+
+
 # =============================================================================
 # 主 State
 # =============================================================================
@@ -50,28 +97,38 @@ class AgentState(MessagesState):
     messages 会自动累积历史消息。
 
     所有节点返回 dict[str, Any]，LangGraph 自动合并到 State。
+
+    设计原则：
+    - 每个字段有明确的 owner（写入节点）
+    - 追加型字段（agent_traces, branch_history）使用 _append_list reducer
+    - 分支切换时重置上一个分支的控制信号（避免跨分支污染）
     """
 
-    # ---- 渠道与会话 ----
+    # ====== 会话元数据（owner: session_context，之后只读）======
     session_id: str           # 会话唯一标识
     customer_id: str          # 客户唯一标识
     channel: str              # whatsapp / wechat / web / messenger / tiktok
     language: str             # zh / en / ja / ko（默认 zh）
 
-    # ---- 路由 ----
+    # ====== 路由（owner: intent_router）======
     current_branch: str       # service / sales / operations / planner
     intent_scores: dict       # {"service": 0.1, "sales": 0.05, ...}
 
-    # ---- 业务数据 ----
-    need: TripNeed            # 客户出行需求
-    draft: TripDraft          # 行程草案
-    revision_count: int       # 修订次数，硬上限 3
-    intent_level: str         # high / mid / low
+    # ====== 业务数据 ======
+    need: TripNeed            # 客户出行需求（owner: trip_planner）
+    draft: TripDraft          # 行程草案（owner: trip_planner）
+    quote: str                # 结构化报价文本（owner: sales_agent）
+    revision_count: int       # 修订次数，硬上限 3（owner: revision_loop）
 
-    # ---- 控制 ----
-    need_human: bool          # 是否需要转人工
-    next_action: str          # revise / accept / give_up
+    # ====== 控制信号 ======
+    need_human: bool          # 是否需要转人工（由触发 Agent 设置）
+    handoff: HandoffContext   # 🆕 转人工上下文——替代裸 need_human 判断
+    intent_level: str         # 意向等级（owner: intent_scorer(定制流) / sales_agent(销售流)）
+    next_action: str          # 下一步动作（owner: intent_scorer(定制流) / sales_agent(销售流)）
 
-    # ---- 输出 ----
-    final_reply: str          # 最终回复文本
-    quote: str                # 报价单文本
+    # ====== 输出 ======
+    final_reply: str          # 面向用户的最终回复
+
+    # ====== 🆕 审计与追踪 ======
+    agent_traces: Annotated[list[dict], _append_list]      # Agent 执行日志（追加）
+    branch_history: Annotated[list[dict], _append_list]    # 用户分支路径（追加）
