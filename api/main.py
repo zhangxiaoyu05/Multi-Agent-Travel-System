@@ -326,15 +326,6 @@ async def root():
     return {"message": "前端页面未找到，请访问 /docs 查看 API 文档", "version": "0.3.0"}
 
 
-@app.get("/profile")
-async def profile_page():
-    """返回用户画像页面"""
-    profile_path = os.path.join(_static_dir, "profile.html")
-    if os.path.isfile(profile_path):
-        return FileResponse(profile_path)
-    return {"message": "画像页面未找到", "version": "0.3.0"}
-
-
 @app.get("/health")
 async def health_check():
     """健康检查——返回各组件连接状态"""
@@ -874,6 +865,8 @@ async def update_profile(
         updates = {}
         for field_name, value in req.model_dump(exclude_none=True, exclude={"accept_suggestions"}).items():
             if value is not None:
+                # budget_range 是 BudgetRange 模型，直接用 model_dump 后的 dict
+                # memory.py 会统一序列化 JSON 字段
                 updates[field_name] = value
 
         if updates:

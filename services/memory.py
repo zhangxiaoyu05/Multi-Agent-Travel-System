@@ -557,7 +557,7 @@ class MemoryManager:
             if key not in valid_columns:
                 continue
             if key in ("preferred_destinations", "interests", "special_needs",
-                        "preferred_seasons", "suggested_fields"):
+                        "preferred_seasons", "suggested_fields", "budget_range"):
                 set_clauses.append(f"{key} = :{key}")
                 params[key] = json.dumps(value, ensure_ascii=False) if value is not None else None
             else:

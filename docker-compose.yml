@@ -37,6 +37,7 @@ services:
       - .env
     environment:
       - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
       - REDIS_HOST=redis
       - MILVUS_HOST=milvus-standalone
     depends_on:
