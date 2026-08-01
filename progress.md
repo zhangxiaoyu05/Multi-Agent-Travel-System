@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01
+> 最后更新：2026-08-01（Phase 12 完成）
 
 ---
 
@@ -381,6 +381,45 @@ Phase 11 实现了记忆的存储和前端展示，但 **AI Agent 在对话时�
 
 ---
 
+### Phase 12 ✅ 用户可打断功能——SSE 流式中断 + 补充纠正（2026-08-01）
+
+用户可在 AI 生成过程中随时中断，补充或纠正需求后继续对话，避免等待完整生成或在错误方向浪费 token。
+
+#### 核心改动
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `frontend/index.html` | +~90 行 | 停止按钮 CSS（脉冲动画）+ HTML + AbortController 中断逻辑 + 中断气泡渲染 |
+| `api/main.py` | +5 行 | `_event_stream()` 捕获 `GeneratorExit`/`CancelledError`，优雅处理客户端断开 |
+
+#### 用户操作流程
+
+```
+用户发消息 → (▶ 变 ■ 红色脉冲) → AI 开始生成 → SSE 进度事件到达
+   ↓
+用户发现需要补充/纠正 → 点击 ■
+   ↓
+fetch AbortController.abort() → SSE 流断开
+   ↓
+气泡显示「在「正在生成行程…」阶段被中断」+ ⚠ 已中断 badge
+输入框恢复可用 + toast "已停止生成，你可以补充或修正后重新发送"
+   ↓
+用户输入补充/纠正 → 发送 → 新请求包含完整对话上下文 → AI 重新生成
+```
+
+#### 技术细节
+
+- **前端**：`AbortController.signal` 绑定到 `fetch()`，点击停止调用 `abort()` → fetch 抛出 `AbortError` → 触发 `_finalizeInterruptedBubble()`
+- **中断气泡**：保留已接收的进度标签（如「在「正在生成行程…」阶段被中断」），橙色 badge 标记中断状态
+- **后端**：`except (GeneratorExit, asyncio.CancelledError)` 捕获客户端断开，记录日志，让 LangGraph `astream` 随 asyncio 任务取消自然中断
+- **上下文保持**：下一轮请求正常加载 MySQL 历史消息 + LangGraph checkpoint，AI 能感知中断前对话
+
+#### 测试结果
+
+- `pytest tests/ -v` → **193 个测试全部通过**，零回归
+
+---
+
 ### 下一步：持续优化
 
 **完成时间**：2026-07-30
@@ -662,4 +701,5 @@ event: error           → {"message":"..."}
 | 2026-08-01 | Chrome DevTools E2E 测试 + Bug 修复：① Docker 内网 MYSQL_PORT=3307 导致 MySQL 连接失败 → docker-compose.yml 覆盖为 3306；② `/profile` 页面路由遮蔽 API 端点（`GET /profile` 同时有 HTML 页面和 API 两个 handler）→ 删除冗余 HTML 路由（StaticFiles 已提供）；③ `budget_range`（Pydantic BudgetRange 对象）model_dump 后为 dict 未序列化直接传 SQL → memory.py 加入 JSON 序列化字段；④ 全链路验证：注册/登录/消息发送/对话切换/画像编辑 均通过 | ✅ |
 | 2026-08-01 | Phase 11-续：AI 记忆注入——① AgentState 新增 user_profile/user_preferences 字段；② session_context 改为异步节点，从 MemoryManager 加载记忆；③ trip_planner：画像自动补全 theme/pace/special_requests → 减少追问 + 「💡 根据您的历史偏好...」提示 + Prompt 新增「客户画像」区块；④ customer_service/sales_agent：extra_context 注入国籍/兴趣/预算；⑤ `/chat` `/chat/stream` 端点从 MySQL 加载历史消息回退（checkpoint 空时）；⑥ Chrome DevTools E2E 验证：AI 生成行程引用画像数据（素食·温泉·古寺主题）；⑦ 7 个文件改动，77 个测试通过 | ✅ |
 | 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
+| 2026-08-01 | Phase 12：用户可打断功能——① 前端新增停止按钮（红色脉冲动画），AbortController 中断 SSE 流，中断气泡保留进度阶段 + ⚠ 已中断 badge；② 后端 `_event_stream()` 捕获 GeneratorExit/CancelledError 优雅处理客户端断开；③ 用户可随时中断 AI 生成、补充纠正后继续对话，上下文不丢失；④ 2 个文件改动，193 测试全部通过 | ✅ |
 

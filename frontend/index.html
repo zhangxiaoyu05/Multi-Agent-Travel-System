@@ -289,6 +289,25 @@
   .btn-send:hover { background: var(--primary-hover); transform: scale(1.05); }
   .btn-send:disabled { background: #a5b4fc; cursor: not-allowed; transform: none; }
 
+  .btn-stop {
+    width: 44px; height: 44px; border-radius: 50%; border: none;
+    background: var(--danger); color: #fff; cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    transition: all var(--transition); animation: pulse-stop 1.5s infinite;
+  }
+  .btn-stop:hover { background: #dc2626; transform: scale(1.08); }
+  @keyframes pulse-stop { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0.4)} 50%{box-shadow:0 0 0 8px rgba(239,68,68,0)} }
+
+  .btn-send.hidden, .btn-stop.hidden { display: none; }
+
+  /* Interrupted message badge */
+  .interrupted-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;
+    background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa;
+    margin-left: 4px;
+  }
+
   /* Toast */
   .toast {
     position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
@@ -412,6 +431,7 @@
             rows="1"
             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();Chat.send()}"></textarea>
           <button class="btn-send" onclick="Chat.send()" id="sendBtn">▶</button>
+          <button class="btn-stop hidden" onclick="Chat.stop()" id="stopBtn" title="停止生成">■</button>
         </div>
       </div>
     </div>
@@ -720,6 +740,9 @@ const Conversations = {
 // =============================================================================
 const Chat = {
   _pendingTitleUpdate: false,
+  _abortController: null,
+  _streamingBubbleId: null,
+  _streamingText: '',
 
   async newConversation() {
     try {
@@ -761,6 +784,29 @@ const Chat = {
     container.appendChild(div);
   },
 
+  /** 用户点击停止按钮 → 中断当前 AI 生成 */
+  stop() {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+  },
+
+  /** 恢复输入框和发送按钮（停止/完成后共用） */
+  _restoreInput() {
+    const sendBtn = document.getElementById('sendBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const input = document.getElementById('messageInput');
+    sendBtn.classList.remove('hidden');
+    stopBtn.classList.add('hidden');
+    sendBtn.disabled = false;
+    input.disabled = false;
+    input.focus();
+    this._abortController = null;
+    this._streamingBubbleId = null;
+    this._streamingText = '';
+  },
+
   async send() {
     const input = document.getElementById('messageInput');
     const message = input.value.trim();
@@ -784,11 +830,21 @@ const Chat = {
     this._render({role: 'user', content: message});
 
     const bubbleId = 'msg-' + Date.now();
+    this._streamingBubbleId = bubbleId;
+    this._streamingText = '';
     this._showStreamingBubble(bubbleId);
 
+    // 切换为停止按钮
     const sendBtn = document.getElementById('sendBtn');
-    sendBtn.disabled = true;
+    const stopBtn = document.getElementById('stopBtn');
+    sendBtn.classList.add('hidden');
+    stopBtn.classList.remove('hidden');
     input.disabled = true;
+
+    // 创建 AbortController 用于中断
+    this._abortController = new AbortController();
+
+    let interrupted = false;
 
     try {
       const resp = await fetch(API_BASE + '/chat/stream', {
@@ -803,6 +859,7 @@ const Chat = {
           channel: 'web',
           language: 'zh',
         }),
+        signal: this._abortController.signal,
       });
 
       if (!resp.ok) {
@@ -839,6 +896,7 @@ const Chat = {
                 case 'node_complete':
                   break;
                 case 'token':
+                  this._streamingText += data.content;
                   this._appendStreamingToken(bubbleId, data.content);
                   break;
                 case 'done':
@@ -855,16 +913,55 @@ const Chat = {
         }
       }
     } catch (err) {
-      this._updateStreamingBubble(bubbleId, `❌ 请求失败：${err.message}`);
-      showToast('连接失败，请确认服务已启动', true);
+      if (err.name === 'AbortError') {
+        // 用户主动中断——保留流式气泡 + 中断标记
+        interrupted = true;
+        this._finalizeInterruptedBubble(bubbleId);
+      } else {
+        this._updateStreamingBubble(bubbleId, `❌ 请求失败：${err.message}`);
+        showToast('连接失败，请确认服务已启动', true);
+      }
     } finally {
-      sendBtn.disabled = false;
-      input.disabled = false;
-      input.focus();
+      if (!interrupted) {
+        this._restoreInput();
+      }
+      // 中断后也要恢复输入，在 _finalizeInterruptedBubble 里调用
 
       // Refresh conversation list to update title
       setTimeout(() => Conversations.load(), 500);
     }
+  },
+
+  /** 将流式气泡转换为中断状态——保留已有内容 + 中断标记 */
+  _finalizeInterruptedBubble(id) {
+    const contentEl = document.getElementById(id + '-content');
+    const bubble = document.getElementById(id);
+
+    // 保留已接收的内容
+    let partialContent = '';
+    if (contentEl) {
+      partialContent = contentEl.textContent || '';
+      // 提取进度文本，用于展示中断阶段
+      var progressMatch = partialContent.match(/⏳ (.+)/);
+      if (progressMatch) {
+        partialContent = '*（在「' + progressMatch[1] + '」阶段被中断）*';
+      } else {
+        partialContent = partialContent.trim();
+        if (!partialContent) {
+          partialContent = '*（已中断，无回复内容）*';
+        }
+      }
+    }
+
+    // 替换为渲染后的气泡
+    if (bubble) {
+      var metaHtml = '<span class="interrupted-badge">⚠ 已中断</span>';
+      bubble.innerHTML = '<div class="msg-avatar">🤖</div><div class="msg-content"><div class="msg-bubble">' + simpleMarkdown(partialContent) + '</div><div class="msg-meta">' + metaHtml + '</div></div>';
+    }
+
+    // 恢复输入
+    this._restoreInput();
+    showToast('已停止生成，你可以补充或修正后重新发送');
   },
 
   _getBranchClass(branch) {

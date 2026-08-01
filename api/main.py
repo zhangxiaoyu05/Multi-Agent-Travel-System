@@ -770,6 +770,8 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "language": req.language,
         }
 
+        final_state = None
+
         try:
             # 自动更新对话标题
             try:
@@ -782,7 +784,6 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             except Exception:
                 pass
 
-            final_state = None
             async for event in _graph.astream(
                 initial_state,
                 config={"configurable": {"thread_id": req.conversation_id}},
@@ -794,7 +795,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                     final_state = node_output
                     yield f"event: node_complete\ndata: {json.dumps({'node': node_name}, ensure_ascii=False)}\n\n"
 
-            # 构建最终响应
+            # 构建最终响应（正常完成）
             if final_state:
                 draft = final_state.get("draft", {}) or {}
                 draft_resp = None
@@ -833,6 +834,12 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                 )
             else:
                 yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
+
+        except (GeneratorExit, asyncio.CancelledError):
+            # 🛑 用户主动中断——前端已展示部分内容，无需额外处理
+            # Graph 执行会随 asyncio 任务取消而中断
+            logger.info(f"用户中断 SSE 流 (conversation={req.conversation_id})")
+            raise
 
         except Exception as e:
             logger.exception(f"SSE 流式处理失败: {e}")
