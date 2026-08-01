@@ -6,28 +6,28 @@
 <title>入境定制游 · AI 多 Agent 系统</title>
 <style>
   :root {
-    --bg: #f5f5f5;
+    --bg: #f1f5f9;
     --surface: #ffffff;
-    --sidebar-bg: #1e1e2e;
-    --sidebar-hover: #2a2a3d;
-    --sidebar-active: #363650;
-    --sidebar-text: #cdd6f4;
-    --sidebar-muted: #6c7086;
-    --border: #e4e7ed;
-    --text: #303133;
-    --text-secondary: #909399;
-    --text-muted: #c0c4cc;
-    --primary: #6366f1;
-    --primary-light: #eef2ff;
-    --primary-hover: #4f46e5;
+    --sidebar-bg: #ffffff;
+    --sidebar-hover: #f1f5f9;
+    --sidebar-active: #e0f2fe;
+    --sidebar-text: #334155;
+    --sidebar-muted: #94a3b8;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --text-secondary: #64748b;
+    --text-muted: #94a3b8;
+    --primary: #0ea5e9;
+    --primary-light: #e0f2fe;
+    --primary-hover: #0284c7;
     --success: #22c55e;
     --warning: #f59e0b;
     --danger: #ef4444;
-    --radius: 12px;
+    --radius: 10px;
     --radius-sm: 8px;
     --radius-xs: 6px;
-    --shadow: 0 1px 3px rgba(0,0,0,0.08);
-    --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+    --shadow: 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 16px rgba(0,0,0,0.08);
     --transition: 0.2s ease;
   }
 
@@ -43,7 +43,7 @@
 
   /* ====== Login Page ====== */
   .login-overlay {
-    position: fixed; inset: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    position: fixed; inset: 0; background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%);
     display: flex; align-items: center; justify-content: center; z-index: 1000;
   }
   .login-overlay.hidden { display: none; }
@@ -88,22 +88,23 @@
   .sidebar {
     width: 280px; background: var(--sidebar-bg); color: var(--sidebar-text);
     display: flex; flex-direction: column; flex-shrink: 0; user-select: none;
+    border-right: 1px solid var(--border);
   }
   .sidebar-header {
     padding: 16px; display: flex; align-items: center; gap: 10px;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid var(--border);
   }
   .sidebar-logo { font-size: 24px; }
   .sidebar-title { font-size: 15px; font-weight: 600; }
 
   .btn-new-chat {
     margin: 14px 16px; padding: 10px 16px;
-    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: var(--radius-sm); color: var(--sidebar-text);
+    background: var(--primary-light); border: 1px solid #bae6fd;
+    border-radius: var(--radius-sm); color: var(--primary);
     font-size: 13px; cursor: pointer; text-align: left; transition: all var(--transition);
-    display: flex; align-items: center; gap: 8px; font-family: inherit;
+    display: flex; align-items: center; gap: 8px; font-family: inherit; font-weight: 500;
   }
-  .btn-new-chat:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,0.2); }
+  .btn-new-chat:hover { background: #bae6fd; border-color: var(--primary); }
 
   .conversation-list { flex: 1; overflow-y: auto; padding: 0 12px; }
   .conv-item {
@@ -123,13 +124,13 @@
     cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; margin-left: 4px;
   }
   .conv-item:hover .conv-delete { display: block; }
-  .conv-item .conv-delete:hover { color: var(--danger); background: rgba(239,68,68,0.15); }
+  .conv-item .conv-delete:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
 
   .sidebar-footer {
-    padding: 14px 16px; border-top: 1px solid rgba(255,255,255,0.06);
+    padding: 14px 16px; border-top: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between;
   }
-  .sidebar-user { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .sidebar-user { font-size: 13px; display: flex; align-items: center; gap: 6px; color: var(--text); }
   .sidebar-user .user-avatar {
     width: 28px; height: 28px; border-radius: 50%; background: var(--primary);
     display: flex; align-items: center; justify-content: center; font-size: 13px; color: #fff;
@@ -139,24 +140,24 @@
     cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: 4px;
     transition: all var(--transition); font-family: inherit;
   }
-  .btn-logout:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
+  .btn-logout:hover { color: var(--danger); background: rgba(239,68,68,0.08); }
 
   /* Sidebar Selectors (Mode + Language) */
   .sidebar-selectors {
     padding: 10px 16px 0;
-    border-top: 1px solid rgba(255,255,255,0.06);
+    border-top: 1px solid var(--border);
     display: flex; gap: 8px;
   }
   .sidebar-selectors select {
     flex: 1; padding: 8px 12px;
-    background: rgba(255,255,255,0.06); color: var(--sidebar-text);
-    border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-xs);
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: var(--radius-xs);
     font-size: 13px; font-family: inherit; cursor: pointer;
     outline: none; transition: all var(--transition);
     min-width: 0; /* allow flex shrink */
   }
-  .sidebar-selectors select:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,0.25); }
-  .sidebar-selectors select:focus { border-color: var(--primary); }
+  .sidebar-selectors select:hover { background: var(--sidebar-hover); border-color: #cbd5e1; }
+  .sidebar-selectors select:focus { border-color: var(--primary); background: #fff; }
 
   /* Quick FAQ Tags */
   .quick-faqs {
@@ -166,7 +167,7 @@
   .quick-faq-btn {
     padding: 4px 12px; border-radius: 16px; font-size: 12px;
     background: var(--primary-light); color: var(--primary);
-    border: 1px solid #c7d2fe; cursor: pointer; font-family: inherit;
+    border: 1px solid #bae6fd; cursor: pointer; font-family: inherit;
     transition: all var(--transition);
   }
   .quick-faq-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
@@ -214,7 +215,7 @@
     margin-top: 2px;
   }
   .msg.user .msg-avatar { background: var(--primary); color: #fff; }
-  .msg.agent .msg-avatar { background: #eef2ff; color: var(--primary); }
+  .msg.agent .msg-avatar { background: var(--primary-light); color: var(--primary); }
 
   .msg-content { min-width: 0; display: flex; flex-direction: column; }
   .msg.user .msg-content { align-items: flex-end; }
@@ -233,8 +234,8 @@
     padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
     margin-bottom: 4px; opacity: 0.85;
   }
-  .mode-planner { background: rgba(114,46,209,0.15); color: #722ed1; }
-  .mode-support { background: rgba(24,144,255,0.15); color: #1890ff; }
+  .mode-planner { background: rgba(14,165,233,0.12); color: #0284c7; }
+  .mode-support { background: rgba(37,99,235,0.12); color: #2563eb; }
 
   .msg-meta { display: flex; gap: 8px; align-items: center; margin-top: 5px; font-size: 11px; flex-wrap: wrap; }
 
@@ -249,19 +250,19 @@
   .msg.agent .msg-bubble li { margin: 1px 0; line-height: 1.6; }
   .msg.agent .msg-bubble p { margin: 0; }
   .msg.agent .msg-bubble p + p { margin-top: 6px; }
-  .msg.agent .msg-bubble code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
-  .msg.agent .msg-bubble pre { background: #f5f5f5; padding: 10px 14px; border-radius: 6px; overflow-x: auto; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+  .msg.agent .msg-bubble code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+  .msg.agent .msg-bubble pre { background: #f8fafc; padding: 10px 14px; border-radius: 6px; overflow-x: auto; margin: 8px 0; font-size: 13px; line-height: 1.5; }
   .msg.agent .msg-bubble pre code { background: none; padding: 0; }
-  .msg.agent .msg-bubble strong { color: #1a1a2e; }
+  .msg.agent .msg-bubble strong { color: var(--text); }
 
   /* Message left accent by branch */
   .msg.agent { border-left: 3px solid transparent; padding-left: 7px; }
   .msg.agent[data-branch="trip_planner"],
-  .msg.agent[data-branch="planner"] { border-left-color: #722ed1; }  /* 紫色·行程定制 */
-  .msg.agent[data-branch="customer_service"] { border-left-color: #1890ff; }  /* 蓝色·智能客服 */
-  .msg.agent[data-branch="human_handoff"] { border-left-color: #f5222d; }  /* 红色·转人工 */
-  .msg.agent[data-branch="sales_agent"] { border-left-color: #fa8c16; }  /* 橙色·销售 */
-  .msg.agent[data-branch="operations_agent"] { border-left-color: #52c41a; }  /* 绿色·运营 */
+  .msg.agent[data-branch="planner"] { border-left-color: #0ea5e9; }  /* 天蓝·行程定制 */
+  .msg.agent[data-branch="customer_service"] { border-left-color: #2563eb; }  /* 蓝·智能客服 */
+  .msg.agent[data-branch="human_handoff"] { border-left-color: #f5222d; }  /* 红·转人工 */
+  .msg.agent[data-branch="sales_agent"] { border-left-color: #fa8c16; }  /* 橙·销售 */
+  .msg.agent[data-branch="operations_agent"] { border-left-color: #52c41a; }  /* 绿·运营 */
 
   /* Branch Tag (inside bubble header) */
   .branch-tag {
@@ -269,11 +270,11 @@
     padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
     margin-bottom: 8px;
   }
-  .b-customer_service { background: #e6f7ff; color: #1890ff; }
+  .b-customer_service { background: #dbeafe; color: #2563eb; }
   .b-sales_agent { background: #fff7e6; color: #fa8c16; }
-  .b-operations_agent { background: #f6ffed; color: #52c41a; }
-  .b-trip_planner, .b-planner { background: #f9f0ff; color: #722ed1; }
-  .b-human_handoff { background: #fff1f0; color: #f5222d; }
+  .b-operations_agent { background: #f0fdf4; color: #16a34a; }
+  .b-trip_planner, .b-planner { background: #e0f2fe; color: #0ea5e9; }
+  .b-human_handoff { background: #fef2f2; color: #dc2626; }
 
   /* Mode switch divider */
   .mode-divider {
@@ -345,7 +346,7 @@
     transition: all var(--transition);
   }
   .btn-send:hover { background: var(--primary-hover); transform: scale(1.05); }
-  .btn-send:disabled { background: #a5b4fc; cursor: not-allowed; transform: none; }
+  .btn-send:disabled { background: #7dd3fc; cursor: not-allowed; transform: none; }
 
   .btn-stop {
     width: 44px; height: 44px; border-radius: 50%; border: none;
@@ -369,13 +370,38 @@
   /* Toast */
   .toast {
     position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-    background: #333; color: #fff; padding: 10px 24px;
+    background: #1e293b; color: #fff; padding: 10px 24px;
     border-radius: 20px; font-size: 13px; z-index: 2000;
     animation: fadeInOut 3s forwards;
   }
   @keyframes fadeInOut { 0%{opacity:0;transform:translateX(-50%) translateY(-10px)} 10%{opacity:1;transform:translateX(-50%) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
 
   .toast.error { background: var(--danger); }
+
+  /* Confirm Dialog */
+  .confirm-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 3000; animation: fadeIn 0.2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .confirm-dialog {
+    background: #fff; border-radius: var(--radius); padding: 24px 28px 20px;
+    max-width: 360px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  .confirm-dialog h3 { margin: 0 0 8px; font-size: 16px; color: var(--text); }
+  .confirm-dialog p { margin: 0 0 20px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+  .confirm-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .confirm-actions button {
+    padding: 8px 20px; border-radius: 6px; font-size: 13px; font-family: inherit;
+    cursor: pointer; border: none; transition: all var(--transition);
+  }
+  .btn-cancel { background: var(--surface); color: var(--text-secondary); }
+  .btn-cancel:hover { background: var(--border); }
+  .btn-danger-confirm { background: var(--danger); color: #fff; }
+  .btn-danger-confirm:hover { background: #dc2626; }
 
   /* Summary Banner */
   .summary-banner {
@@ -404,7 +430,7 @@
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #d0d5dd; border-radius: 10px; }
-  .sidebar ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); }
+  .sidebar ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); }
 
   /* Responsive */
   @media (max-width: 768px) {
@@ -617,6 +643,30 @@ function showToast(msg, isError) {
   setTimeout(() => t.remove(), 3000);
 }
 
+function showConfirm(title, message) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `<div class="confirm-dialog">
+      <h3>${title}</h3>
+      <p>${message}</p>
+      <div class="confirm-actions">
+        <button class="btn-cancel">取消</button>
+        <button class="btn-danger-confirm">删除</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+
+    const cleanup = () => overlay.remove();
+    overlay.querySelector('.btn-cancel').onclick = () => { cleanup(); resolve(false); };
+    overlay.querySelector('.btn-danger-confirm').onclick = () => { cleanup(); resolve(true); };
+    overlay.addEventListener('click', e => { if (e.target === overlay) { cleanup(); resolve(false); } });
+    document.addEventListener('keydown', function esc(e) {
+      if (e.key === 'Escape') { cleanup(); resolve(false); document.removeEventListener('keydown', esc); }
+    });
+  });
+}
+
 // =============================================================================
 // App Mode
 // =============================================================================
@@ -790,7 +840,8 @@ const Conversations = {
   },
 
   async remove(convId) {
-    if (!confirm('确定删除这个对话？')) return;
+    const ok = await showConfirm('删除对话', '删除后将无法恢复，确定要继续吗？');
+    if (!ok) return;
     try {
       await api('DELETE', '/conversations/' + convId);
       if (this._activeId === convId) {
@@ -1087,7 +1138,7 @@ const Chat = {
   _renderIntentScores(scores) {
     if (!scores || !Object.keys(scores).length) return '';
     const labels = {service:'客服',sales:'销售',operations:'运营',planner:'定制'};
-    const colors = {service:'#1890ff',sales:'#fa8c16',operations:'#52c41a',planner:'#722ed1'};
+    const colors = {service:'#2563eb',sales:'#f59e0b',operations:'#10b981',planner:'#0ea5e9'};
     let html = '<div class="intent-scores">';
     for (const [k, v] of Object.entries(scores)) {
       const pct = Math.round(v * 100);

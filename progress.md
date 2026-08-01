@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01（Phase 13-续-2 模式视觉区分增强）
+> 最后更新：2026-08-01（Phase 14 UI 全局重设计）
 
 ---
 
@@ -614,6 +614,70 @@ Chrome DevTools 实测确认：
 - ✅ Agent 左侧色条生效（蓝 `#1890ff` / 紫 `#722ed1`）
 - ✅ 气泡内分支标签正确翻译（不再显示原始 key `"service"`）
 - ✅ 模式切换时自动插入分隔线
+
+---
+
+### Phase 13-续-3 ✅ 自定义确认对话框——替换浏览器 confirm()（2026-08-01）
+
+#### 问题
+
+删除对话使用浏览器原生 `confirm('确定删除这个对话？')`，系统弹窗风格割裂，体验低端。
+
+#### 实现
+
+新增 `showConfirm(title, message)` 函数，返回 `Promise<boolean>`：
+- 半透明遮罩层 + 居中白底卡片
+- 标题 + 描述文案
+- 取消按钮（灰色）/ 删除按钮（红色）
+- 动画：fadeIn 0.2s + slideUp 0.25s
+- 交互：点击遮罩关闭 / ESC 键关闭 / 按钮关闭
+- `async/await` 无缝替换 `confirm()`，仅改 1 行
+
+改动：`frontend/index.html` 新增 CSS ~25 行 + JS `showConfirm()` ~20 行，`Conversations.remove()` 替换 1 行。
+
+---
+
+### Phase 14 ✅ UI 全局重设计——Skyline 天蓝旅行主题（2026-08-01）
+
+#### 背景
+
+用户要求去掉紫色、使用浅色系、简约风格、贴合旅行主题。
+
+#### 配色方案：Skyline（天际线）
+
+灵感：天空蓝 / 海洋 / 云白 / 轻灰。
+
+| Token | 旧值（Indigo 紫） | 新值（Skyline 天蓝） |
+|------|------|------|
+| `--primary` | `#6366f1` 靛紫 | `#0ea5e9` 天蓝 |
+| `--sidebar-bg` | `#1e1e2e` 暗紫 | `#ffffff` 白色（浅色侧边栏） |
+| `--sidebar-text` | `#cdd6f4` 浅紫 | `#334155` 深灰蓝 |
+| `--bg` | `#f5f5f5` | `#f1f5f9` 柔和灰蓝 |
+| `--text` | `#303133` | `#1e293b` slate-800 |
+| `--radius` | `12px` | `10px` 更精致 |
+| `--shadow` | `0 1px 3px` | `0 1px 2px` 更轻柔 |
+| 登录渐变 | `#667eea → #764ba2` 紫 | `#0ea5e9 → #38bdf8` 天蓝 |
+
+#### 变更范围
+
+| 文件 | 改动 | 说明 |
+|------|:---:|------|
+| `frontend/index.html` | ~35 处 | CSS 变量、登录渐变、侧边栏浅化（白底+border+浅hover/active）、按钮/标签/色条/下拉框/Toast/圆环色 |
+| `frontend/profile.html` | ~6 处 | CSS 变量同步、Toast、按钮色 |
+
+侧边栏专项改造：
+- 变量：`#0f172a`→`#ffffff`，`#e2e8f0`→`#334155`，`#1e293b`→`#f1f5f9`
+- 分隔线：`rgba(255,255,255,0.06)` → `var(--border)`
+- 新对话按钮：半透明白 → 天蓝浅底+天蓝字
+- 下拉框：半透明白 → `var(--bg)` 灰底+深色字
+- 新增 `border-right: 1px solid var(--border)` 分割主区域
+
+#### 验证
+
+Chrome DevTools 确认所有 CSS 变量正确：
+```
+--primary: #0ea5e9 │ --sidebar-bg: #ffffff │ --sidebar-text: #334155 │ --bg: #f1f5f9
+```
 
 ---
 
