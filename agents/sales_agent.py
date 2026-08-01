@@ -33,8 +33,13 @@ class SalesAgent(BaseAgent):
                 "next_action": "revise",
             }
 
+        # 🧠 构建用户画像上下文
+        extra_context = self._build_context(state)
+
         # 标准 tool-calling 循环
-        loop_result = await self._run_tool_calling_loop(user_msg, language=language)
+        loop_result = await self._run_tool_calling_loop(
+            user_msg, language=language, extra_context=extra_context,
+        )
         final_text = loop_result["final_text"]
         need_human = loop_result["need_human"]
 
@@ -54,6 +59,26 @@ class SalesAgent(BaseAgent):
             "intent_level": intent_level,
             "next_action": next_action,
         }
+
+    @staticmethod
+    def _build_context(state: AgentState) -> dict:
+        """从 State 中的画像/偏好构建附加上下文"""
+        ctx = {}
+        profile = state.get("user_profile", {}) or {}
+        if profile.get("nationality"):
+            ctx["客户国籍"] = profile["nationality"]
+        budget_str = None
+        br = profile.get("budget_range")
+        if br:
+            if isinstance(br, dict):
+                lo, hi, cur = br.get("min"), br.get("max"), br.get("currency", "USD")
+                ctx["预算范围"] = f"{lo}-{hi} {cur}" if lo and hi else f"{hi} {cur}" if hi else f"{lo} {cur}" if lo else ""
+            else:
+                ctx["预算范围"] = str(br)
+        if profile.get("preferred_destinations"):
+            dests = profile["preferred_destinations"]
+            ctx["意向目的地"] = ", ".join(dests) if isinstance(dests, list) else str(dests)
+        return ctx
 
     def _score_intent(self, user_msg: str, reply_text: str) -> tuple[str, str]:
         """基于关键词评估购买意向"""

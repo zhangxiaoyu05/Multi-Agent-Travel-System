@@ -166,6 +166,10 @@ class TripPlannerAgent(BaseAgent):
         existing_need = raw_need if raw_need else {}
         revision_count = state.get("revision_count", 0)
 
+        # 🧠 加载用户画像和中期偏好
+        profile = state.get("user_profile", {}) or {}
+        prefs = state.get("user_preferences", {}) or {}
+
         if not user_msg:
             return {
                 "need": existing_need,
@@ -177,12 +181,20 @@ class TripPlannerAgent(BaseAgent):
             merged_need = existing_need
         else:
             extracted = self._extract_fields(user_msg, existing_need)
-            merged_need = {**existing_need, **extracted}
+            # 🧠 从画像/偏好自动补全缺失字段（不覆盖用户明确提供的信息）
+            merged_need = self._enrich_from_memory(
+                {**existing_need, **extracted}, profile, prefs
+            )
 
         # Step 2: 检查必填项
         missing = [f for f in REQUIRED_FIELDS if not merged_need.get(f)]
         if missing:
-            return self._ask_missing_fields(missing, merged_need)
+            result = self._ask_missing_fields(missing, merged_need, profile)
+            # 🧠 画像自动补全后字段齐全 → 跳过追问，继续生成
+            if result.get("_auto_filled"):
+                merged_need = result["need"]
+            else:
+                return result
 
         # Step 3: 调用工具（同步，因为 Mock 工具是同步的）
         weather_info = get_weather.invoke({
@@ -207,8 +219,14 @@ class TripPlannerAgent(BaseAgent):
                 f"\n请在原有行程基础上据此调整，并在回复开头说明「已根据您的反馈调整了...」。"
             )
 
+        # 🧠 构建用户画像上下文
+        profile_context = self._build_profile_context(profile, prefs)
+
         generation_prompt = f"""
 请根据以下信息为客户生成详细行程草案：
+
+## 客户画像（来自长期记忆）
+{profile_context if profile_context else '（暂无历史画像数据）'}
 
 ## 客户需求
 - 目的地：{merged_need['destination']}
@@ -307,8 +325,129 @@ class TripPlannerAgent(BaseAgent):
         except Exception:
             return regex_extracted
 
-    def _ask_missing_fields(self, missing: list, need: dict) -> dict:
-        missing_cn = [FIELD_CN_NAMES.get(f, f) for f in missing]
+    # =========================================================================
+    # 🧠 记忆集成方法
+    # =========================================================================
+
+    @staticmethod
+    def _fmt_budget(budget_val) -> str | None:
+        """格式化 budget_range（支持 JSON 对象和字符串）"""
+        if not budget_val:
+            return None
+        if isinstance(budget_val, dict):
+            lo, hi, cur = budget_val.get("min"), budget_val.get("max"), budget_val.get("currency", "USD")
+            parts = [f"{lo}" if lo else "", f"{hi}" if hi else "", cur]
+            parts = [p for p in parts if p]
+            return "/".join(parts) if parts else None
+        return str(budget_val)
+
+    def _enrich_from_memory(self, need: dict, profile: dict, prefs: dict) -> dict:
+        """从画像/偏好自动补全缺失的 need 字段（不覆盖已有值）"""
+        merged = dict(need)
+
+        # 预算：profile.budget_range 优先
+        if not merged.get("budget"):
+            budget_str = self._fmt_budget(profile.get("budget_range"))
+            if not budget_str:
+                budget_str = prefs.get("budget_range")
+            if budget_str:
+                merged["budget"] = budget_str
+
+        # 主题：profile.interests 优先
+        if not merged.get("theme"):
+            interests = profile.get("interests") or prefs.get("interests") or []
+            if isinstance(interests, str):
+                interests = [i.strip() for i in interests.split(",")]
+            if interests:
+                merged["theme"] = interests[0] if len(interests) == 1 else "/".join(interests[:3])
+
+        # 节奏
+        if not merged.get("pace"):
+            pace = profile.get("travel_style") or prefs.get("travel_style")
+            if pace:
+                merged["pace"] = pace
+
+        # 特殊需求
+        if not merged.get("special_requests"):
+            needs = profile.get("special_needs") or prefs.get("special_needs") or []
+            if isinstance(needs, str):
+                needs = [n.strip() for n in needs.split(",")]
+            if needs:
+                merged["special_requests"] = ", ".join(needs)
+
+        return merged
+
+    def _build_profile_context(self, profile: dict, prefs: dict) -> str:
+        """构建注入 prompt 的用户画像上下文"""
+        lines = []
+        if profile.get("nationality"):
+            lines.append(f"- 国籍：{profile['nationality']}")
+        if profile.get("preferred_language"):
+            lines.append(f"- 语言偏好：{profile['preferred_language']}")
+        if profile.get("preferred_destinations"):
+            dests = profile["preferred_destinations"]
+            if isinstance(dests, str):
+                dests = [d.strip() for d in dests.split(",")]
+            lines.append(f"- 意向目的地：{', '.join(dests)}")
+
+        budget_str = self._fmt_budget(profile.get("budget_range"))
+        if budget_str:
+            lines.append(f"- 预算范围：{budget_str}")
+        if profile.get("travel_style"):
+            lines.append(f"- 节奏偏好：{profile['travel_style']}")
+        if profile.get("interests"):
+            interests = profile["interests"]
+            if isinstance(interests, str):
+                interests = [i.strip() for i in interests.split(",")]
+            lines.append(f"- 兴趣标签：{', '.join(interests)}")
+        if profile.get("travel_companion"):
+            lines.append(f"- 同行人：{profile['travel_companion']}")
+        if profile.get("special_needs"):
+            needs = profile["special_needs"]
+            if isinstance(needs, str):
+                needs = [n.strip() for n in needs.split(",")]
+            lines.append(f"- 特殊需求：{', '.join(needs)}")
+        if profile.get("preferred_seasons"):
+            seasons = profile["preferred_seasons"]
+            if isinstance(seasons, str):
+                seasons = [s.strip() for s in seasons.split(",")]
+            lines.append(f"- 偏好季节：{', '.join(seasons)}")
+
+        # 中期偏好补充
+        if prefs and not profile.get("preferred_destinations"):
+            dests = prefs.get("preferred_destinations") or []
+            if dests:
+                lines.append(f"- 最近意向目的地（自动提取）：{', '.join(dests)}")
+            if prefs.get("confidence"):
+                lines.append(f"- 偏好置信度：{prefs['confidence']:.0%}")
+
+        return "\n".join(lines) if lines else ""
+
+    def _ask_missing_fields(self, missing: list, need: dict, profile: dict | None = None) -> dict:
+        """生成追问消息，但跳过画像中已知的字段"""
+        profile = profile or {}
+        # 🧠 过滤：画像中已有值的字段不再追问
+        profile_hints = {
+            "budget": self._fmt_budget(profile.get("budget_range")),
+            "destination": ", ".join(profile.get("preferred_destinations", [])),
+        }
+        actually_missing = [
+            f for f in missing
+            if not profile_hints.get(f)  # 画像中没有此字段的答案才追问
+        ]
+
+        # 如果画像能填补所有缺失字段，自动补全
+        if not actually_missing:
+            for f in missing:
+                if profile_hints.get(f):
+                    need[f] = profile_hints[f]
+            # 递归检查
+            still_missing = [f for f in REQUIRED_FIELDS if not need.get(f)]
+            if not still_missing:
+                # 所有字段齐全，跳到生成
+                return {"need": need, "_auto_filled": True}
+
+        missing_cn = [FIELD_CN_NAMES.get(f, f) for f in actually_missing or missing]
 
         lines = ["好的！还差一点点信息就能为您生成专属行程了：\n"]
         for i, field_name in enumerate(missing_cn, 1):
@@ -321,6 +460,18 @@ class TripPlannerAgent(BaseAgent):
             for k, v in filled.items():
                 cn_name = FIELD_CN_NAMES.get(k, k)
                 lines.append(f"  - {cn_name}：{v}")
+
+        # 🧠 提示已知偏好（让用户知道 AI 了解他们）
+        if profile:
+            hints = []
+            if profile.get("travel_style"):
+                hints.append(f"偏好节奏：{profile['travel_style']}")
+            if profile.get("interests"):
+                hints.append(f"兴趣：{', '.join(profile['interests'])}")
+            if profile.get("travel_companion"):
+                hints.append(f"同行人：{profile['travel_companion']}")
+            if hints:
+                lines.append(f"\n💡 根据您的历史偏好，已了解：{' | '.join(hints)}")
 
         return {
             "need": need,

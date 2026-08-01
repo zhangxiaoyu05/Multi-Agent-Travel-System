@@ -368,22 +368,24 @@ class TestInputGuard:
 
 
 class TestSessionContext:
-    """会话初始化——纯逻辑"""
+    """会话初始化——纯逻辑（async）"""
 
-    def test_sets_defaults(self):
+    @pytest.mark.asyncio
+    async def test_sets_defaults(self):
         from graph.nodes.session_context import session_context
         state = {}
-        result = session_context(state)
+        result = await session_context(state)
         assert result["language"] == "zh"
         assert result["need_human"] is False
         assert result["revision_count"] == 0
         assert result["need"] == {}
         assert result["draft"] == {}
 
-    def test_preserves_existing_values(self):
+    @pytest.mark.asyncio
+    async def test_preserves_existing_values(self):
         from graph.nodes.session_context import session_context
         state = {"language": "en", "revision_count": 2}
-        result = session_context(state)
+        result = await session_context(state)
         assert result["language"] == "en"
         assert result["revision_count"] == 2  # 保留已有值
 

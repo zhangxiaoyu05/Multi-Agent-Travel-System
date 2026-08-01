@@ -8,6 +8,7 @@
 | 字段 | 写入节点（owner） | 读取节点 |
 |------|-------------------|----------|
 | session_id/customer_id/channel/language | session_context | 所有 |
+| user_profile/user_preferences | session_context | 所有 |
 | intent_scores | intent_router | route_decision, human_handoff |
 | current_branch | 各 Agent 节点 | route_decision, human_handoff |
 | need | trip_planner | trip_planner, human_handoff, operations_sync |
@@ -128,6 +129,10 @@ class AgentState(MessagesState):
 
     # ====== 输出 ======
     final_reply: str          # 面向用户的最终回复
+
+    # ====== 🧠 用户记忆（owner: session_context，之后只读）======
+    user_profile: dict          # 长期画像（user_profiles 表）
+    user_preferences: dict      # 中期偏好快照（user_preferences 表最新一条）
 
     # ====== 🆕 审计与追踪 ======
     agent_traces: Annotated[list[dict], _append_list]      # Agent 执行日志（追加）

@@ -611,6 +611,32 @@ async def _post_chat_save(
         logger.debug(f"Post-chat save failed (non-critical): {e}")
 
 
+async def _load_chat_history(conversation_id: str) -> list:
+    """从 MySQL chat_messages 加载历史消息，转为 LangChain Message 列表
+
+    用于在 checkpoint 为空时回退加载历史上下文。
+    """
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        msgs = await mm.get_messages(conversation_id, limit=30)
+        if not msgs:
+            return []
+
+        from langchain_core.messages import HumanMessage as HM, AIMessage as AM
+        result = []
+        for m in msgs:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "user":
+                result.append(HM(content=content))
+            else:
+                result.append(AM(content=content))
+        return result
+    except Exception:
+        return []
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     """核心对话接口
@@ -619,8 +645,11 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     返回 AI 回复及结构化业务数据。
     """
     try:
+        # 🧠 加载历史消息（checkpoint 空时回退 MySQL）
+        history_msgs = await _load_chat_history(req.conversation_id)
+
         initial_state = {
-            "messages": [HumanMessage(content=req.message)],
+            "messages": history_msgs + [HumanMessage(content=req.message)],
             "session_id": req.conversation_id,
             "customer_id": user["user_id"],
             "channel": req.channel,
@@ -730,8 +759,11 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
     """
 
     async def _event_stream():
+        # 🧠 加载历史消息（checkpoint 空时回退 MySQL）
+        history_msgs = await _load_chat_history(req.conversation_id)
+
         initial_state = {
-            "messages": [HumanMessage(content=req.message)],
+            "messages": history_msgs + [HumanMessage(content=req.message)],
             "session_id": req.conversation_id,
             "customer_id": user["user_id"],
             "channel": req.channel,
