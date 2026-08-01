@@ -137,3 +137,120 @@ async def get_cached_summary(session_id: str) -> str | None:
     except Exception:
         pass
     return None
+
+
+# =============================================================================
+# 记忆系统——对话消息缓存
+# =============================================================================
+
+# Redis Key 命名规范：
+#   chat:{conv_id}:messages    → 最近 N 轮完整消息（TTL 24h）
+#   chat:{conv_id}:summary     → 早期消息摘要（TTL 24h）
+#   profile:{user_id}           → 用户画像缓存（TTL 15min）
+#   prefs:{user_id}             → 活跃偏好快照（TTL 1h）
+
+
+async def cache_chat_messages(conversation_id: str, messages: list, ttl: int | None = None):
+    """缓存对话消息到 Redis（短期记忆热数据）
+
+    Args:
+        conversation_id: 对话 ID
+        messages: 消息列表（JSON 可序列化）
+        ttl: TTL 秒数，默认 CHAT_MESSAGE_REDIS_TTL (86400 = 24h)
+    """
+    if ttl is None:
+        ttl = int(os.getenv("CHAT_MESSAGE_REDIS_TTL", "86400"))
+
+    try:
+        r = get_redis()
+        key = f"chat:{conversation_id}:messages"
+        await r.setex(key, ttl, json.dumps(messages, ensure_ascii=False, default=str))
+    except Exception as e:
+        logger.debug(f"cache_chat_messages failed: {e}")
+
+
+async def get_cached_chat_messages(conversation_id: str) -> list | None:
+    """从 Redis 获取缓存的对话消息
+
+    Returns:
+        消息列表，缓存不存在或失败时返回 None
+    """
+    try:
+        r = get_redis()
+        key = f"chat:{conversation_id}:messages"
+        data = await r.get(key)
+        if data:
+            return json.loads(data)
+    except Exception as e:
+        logger.debug(f"get_cached_chat_messages failed: {e}")
+    return None
+
+
+async def cache_chat_summary(conversation_id: str, summary: str, ttl: int | None = None):
+    """缓存对话摘要到 Redis
+
+    Args:
+        conversation_id: 对话 ID
+        summary: 摘要文本
+        ttl: TTL 秒数，默认 86400 (24h)
+    """
+    if ttl is None:
+        ttl = int(os.getenv("REDIS_SUMMARY_TTL", "86400"))
+
+    try:
+        r = get_redis()
+        key = f"chat:{conversation_id}:summary"
+        await r.setex(key, ttl, summary)
+    except Exception as e:
+        logger.debug(f"cache_chat_summary failed: {e}")
+
+
+async def get_cached_chat_summary(conversation_id: str) -> str | None:
+    """从 Redis 获取缓存的对话摘要"""
+    try:
+        r = get_redis()
+        key = f"chat:{conversation_id}:summary"
+        return await r.get(key)
+    except Exception:
+        return None
+
+
+async def cache_user_profile(user_id: str, profile: dict, ttl: int | None = None):
+    """缓存用户画像到 Redis（减少 MySQL 查询）
+
+    Args:
+        user_id: 用户 ID
+        profile: 画像 dict
+        ttl: TTL 秒数，默认 900 (15min)
+    """
+    if ttl is None:
+        ttl = 900
+
+    try:
+        r = get_redis()
+        key = f"profile:{user_id}"
+        await r.setex(key, ttl, json.dumps(profile, ensure_ascii=False, default=str))
+    except Exception as e:
+        logger.debug(f"cache_user_profile failed: {e}")
+
+
+async def get_cached_user_profile(user_id: str) -> dict | None:
+    """从 Redis 获取缓存的用户画像"""
+    try:
+        r = get_redis()
+        key = f"profile:{user_id}"
+        data = await r.get(key)
+        if data:
+            return json.loads(data)
+    except Exception:
+        pass
+    return None
+
+
+async def invalidate_user_cache(user_id: str):
+    """清除用户相关缓存（画像更新时调用）"""
+    try:
+        r = get_redis()
+        await r.delete(f"profile:{user_id}", f"prefs:{user_id}")
+    except Exception:
+        pass

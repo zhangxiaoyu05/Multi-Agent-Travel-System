@@ -256,7 +256,65 @@ Phase 7  ██████████  ✅ RAG 增强（真实向量检索） 
 Phase 8  ██████████  ✅ 基础设施升级（Milvus+MySQL+Redis）  2026-07-30 完成
 Phase 9  ██████████  ✅ SSE 流式输出（进度推送 + 降级兼容）   2026-07-30 完成
 Phase 10 ██████████  ✅ 意图预过滤 + Markdown 渲染 + 格式美化 + 对齐修复 2026-07-31 完成
+Phase 11 ██████████  ✅ 短/中/长期记忆系统（Redis 缓存 + MySQL 持久化 + 上下文窗口管理 + LLM 偏好提取 + 用户画像）   2026-08-01 完成
 ```
+
+---
+
+### Phase 11 ✅ 短/中/长期记忆系统（2026-08-01）
+
+解决用户切换对话窗口后消息丢失、无上下文窗口管理、无用户偏好记忆等问题。
+
+#### 三层记忆架构
+
+| 层级 | 存储 | TTL | 核心功能 |
+|------|------|-----|----------|
+| **短期记忆** | Redis + MySQL | 24h / 7天 | 对话消息缓存、切换窗口恢复、上下文窗口管理（qwen3-max 32K tokens，>70% 触发 LLM 摘要） |
+| **中期记忆** | MySQL | 60天 | LLM 自动提取旅行偏好（目的地/预算/节奏/兴趣/同行人/特殊需求/季节），每 5 轮触发一次 |
+| **长期记忆** | MySQL | 永久 | 用户画像（基础信息 + 旅行偏好 + LLM 建议→用户确认），新增 /profile 页面可编辑 |
+
+#### 新增文件
+
+```
+services/memory.py                  ← 记忆管理器核心（~550 行）
+  ├── MemoryManager 类
+  │   ├── save_message / get_messages / get_message_count
+  │   ├── save_summary / get_summary
+  │   ├── estimate_tokens / should_summarize / generate_summary / trim_context
+  │   ├── extract_preferences / save_preferences / get_active_preferences
+  │   └── get_profile / ensure_profile / update_profile / merge_suggestions / reject_suggestions
+prompts/summary.txt                 ← LLM 对话摘要 Prompt
+prompts/preference_extract.txt      ← LLM 偏好提取 Prompt
+frontend/profile.html               ← 用户画像页面（编辑 + AI 建议采纳/忽略）
+tests/test_memory.py                ← 记忆系统测试（16 用例）
+```
+
+#### 修改文件
+
+```
+scripts/migrate_mysql.sql           ← 新增 4 张表（chat_messages / chat_summaries / user_preferences / user_profiles）
+api/schemas.py                      ← 新增 8 个 Pydantic 模型
+api/main.py                         ← +10 个端点：画像 CRUD、偏好查询、消息增强、对话后处理、定期清理
+services/redis.py                   ← 新增 5 个缓存函数（chat_messages / chat_summary / user_profile / invalidate）
+.env.example                        ← 新增 6 个环境变量（CONTEXT_WINDOW_TOKENS 等）
+frontend/index.html                 ← 侧边栏→画像页入口 + 消息加载增强（元数据+摘要横幅）
+```
+
+#### 关键设计
+
+- **对话消息持久化**：`/chat` 完成后异步保存到 MySQL `chat_messages` 表 + Redis 缓存（`chat:{conv_id}:messages`）
+- **消息加载优先级**：Redis → MySQL → LangGraph checkpoint（三级回退）
+- **上下文窗口管理**：Token 估算（中文 ~1.5 字/token）+ 超过 70% 阈值时 LLM 摘要 + 保留最近 10 轮
+- **偏好提取**：qwen-plus + structured output → Pydantic model → MySQL `user_preferences`（60 天 TTL）
+- **用户画像**：LLM 建议写入 `suggested_fields` → 用户画像页展示 → 用户手动采纳/忽略
+- **定期清理**：后台每小时清理过期消息（7 天）+ 过期偏好（60 天）
+
+#### 验证结果
+
+- `python -m pytest tests/ -v` → **193 个测试全部通过**（177 原有 + 16 新增，6.9s）
+- 根节点零改动（graph/ + agents/ + tools/ + prompts/ 原有文件不变）
+
+---
 
 ### 下一步：持续优化
 
@@ -535,5 +593,6 @@ event: error           → {"message":"..."}
 | 2026-07-31 | 三项优化：① Milvus REST API v1→v2 路径修复（/api/v1/ → /v2/vectordb/），新增 dbName 参数 + 3 次重试 + 增强日志，彻底解决回退到 JSON 问题；② Mock 工具升级：新增 Open-Meteo 真实天气 API（45 城、零 API Key）、TOOL_MODE 双模式切换、日历扩展节假日到 2027 年、5 个真实接口骨架文件（inventory/quote/crm/capi）；③ 测试补齐：新增 test_auth.py（17 用例）、test_conversations.py（9 用例）、test_api.py（9 用例），总测试数 142 → 177 | ✅ |
 | 2026-07-31 | 共享黑板 v2 重构：① AgentState 新增 HandoffContext + AgentTrace 类型 + 3 个字段（handoff / agent_traces / branch_history），用结构化上下文替代裸 need_human 判断；② 字段所有权契约——每个字段明确 owner 节点，追加型字段使用 _append_list reducer；③ route_decision 拆为节点+条件（解决条件边不能写 State 的 LangGraph 限制），分支切换时自动重置 intent_level/next_action 防止跨分支污染；④ 7 个节点写入 agent_traces 审计日志，4 个节点写入 handoff 上下文（含 from_agent + reason + priority + summary），human_handoff 交接单包含优先级标签+报价单+Agent 执行链；⑤ 12 个文件改动，177 测试全部通过 | ✅ |
 | 2026-07-31 | 意图路由修复 + AI 格式美化：① 新增预过滤器 _prefilter_user_message()——12 种能力询问 + 6 种寒暄正则匹配后跳过 LLM，直接返回 service=0.95 / need_human=false，解决"你能干什么"等被误判转人工；② Prompt 增强：intent_router.txt 新增能力询问/寒暄/道谢规则，收紧 need_human 触发条件，防止历史上下文污染；customer_service.txt 新增平台 5 大能力介绍，客服可直接介绍系统功能；③ 投诉优先级判断从 LLM service>0.7 改为 _has_complaint_intent() 关键词匹配，区分"我要投诉"（urgent）vs"投诉流程"（FAQ）；④ human_handoff.py 用 Markdown 标题+`---` 分隔线替代 ASCII `====`/`----` 符号，意图分数格式化为 'service=90%' 可读格式；⑤ 前端 simpleMarkdown 增强——代码块/分隔线/列表包裹/粗体/标题 h1-h3；CSS 新增 agent 气泡内 Markdown 样式（h1/h2/h3/hr/ul/li/code/pre/strong/p） | ✅ |
+| 2026-08-01 | Phase 11：短/中/长期记忆系统——① 对话消息 Redis+MySQL 双写，切换窗口不丢失；② 上下文窗口管理（qwen3-max 32K tokens，超 70% 触发 LLM 摘要）；③ 中期偏好提取（LLM structured output，每 5 轮触发，60 天 TTL）；④ 长期用户画像（永久保存 + /profile 页面 + LLM 建议→用户确认）；⑤ 新增 5 个文件/修改 7 个文件，graph/agents/tools 零改动；⑥ 193 测试全部通过 | ✅ |
 | 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
 

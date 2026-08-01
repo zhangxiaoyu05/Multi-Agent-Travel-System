@@ -98,3 +98,98 @@ CREATE TABLE IF NOT EXISTS conversations (
     INDEX idx_updated (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='对话列表——每个用户可有多个对话';
+
+
+-- =============================================================================
+-- 短期记忆：对话消息记录（Redis 缓存 + MySQL 持久化）
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    conversation_id VARCHAR(64) NOT NULL COMMENT '对话 ID',
+    role            VARCHAR(16) NOT NULL COMMENT 'user / agent',
+    content         TEXT        NOT NULL COMMENT '消息内容',
+    branch          VARCHAR(32)          COMMENT '当前分支',
+    intent_scores   JSON                 COMMENT '意图分数',
+    draft           JSON                 COMMENT '行程草案',
+    metadata        JSON                 COMMENT '其他元数据（quote, need_human 等）',
+    created_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_conv_time (conversation_id, created_at),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='对话消息——短期持久化（默认保留 7 天），切换窗口恢复 + Redis 预热';
+
+
+CREATE TABLE IF NOT EXISTS chat_summaries (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    conversation_id VARCHAR(64) NOT NULL COMMENT '对话 ID',
+    summary         TEXT        NOT NULL COMMENT '摘要文本',
+    from_round      INT         NOT NULL COMMENT '摘要覆盖的起始轮次',
+    to_round        INT         NOT NULL COMMENT '摘要覆盖的结束轮次',
+    token_count     INT                  COMMENT '原始消息估计 token 数',
+    created_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_conv (conversation_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='对话摘要——上下文窗口溢出时自动压缩早期轮次';
+
+
+-- =============================================================================
+-- 中期记忆：LLM 提取的用户旅行偏好（60 天有效期）
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id             VARCHAR(64) NOT NULL COMMENT '用户 ID',
+    preferred_destinations JSON      COMMENT '感兴趣的目的地列表 ["北京","西安"]',
+    budget_range        VARCHAR(32)           COMMENT '预算范围 "$1000-2000/人"',
+    travel_style        VARCHAR(20)           COMMENT '节奏偏好 轻松/适中/紧凑',
+    interests           JSON                  COMMENT '兴趣主题 ["历史文化","美食"]',
+    travel_companion    VARCHAR(20)           COMMENT '同行人 solo/family/couple/friends',
+    special_needs       VARCHAR(255)          COMMENT '特殊需求 素食/轮椅/亲子',
+    preferred_seasons   VARCHAR(128)          COMMENT '偏好旅行季节 春季/秋季',
+    language_pref       VARCHAR(8)  DEFAULT 'zh',
+    source_conversation_id VARCHAR(64)        COMMENT '来源对话 ID',
+    confidence          FLOAT       DEFAULT 0.5 COMMENT 'LLM 提取置信度 0.0-1.0',
+    expire_at           TIMESTAMP             COMMENT '过期时间（默认 +60 天）',
+    created_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user (user_id),
+    INDEX idx_expire (expire_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户旅行偏好——LLM 自动提取，中期记忆（默认 60 天 TTL）';
+
+
+-- =============================================================================
+-- 长期记忆：用户画像（永久保存）
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id             VARCHAR(64) PRIMARY KEY COMMENT '用户 ID（与 users 表关联）',
+    display_name        VARCHAR(64)           COMMENT '显示名称',
+    avatar_url          VARCHAR(255)          COMMENT '头像 URL',
+    email               VARCHAR(128)          COMMENT '邮箱',
+    phone               VARCHAR(32)           COMMENT '手机号',
+    nationality         VARCHAR(64)           COMMENT '国籍',
+    passport_country    VARCHAR(64)           COMMENT '护照签发国',
+    preferred_language  VARCHAR(8)  DEFAULT 'zh',
+
+    -- 深度旅行偏好（用户确认后长期保存）
+    preferred_destinations JSON,
+    budget_range         VARCHAR(32),
+    travel_style         VARCHAR(20),
+    interests            JSON,
+    travel_companion     VARCHAR(20),
+    special_needs        VARCHAR(255),
+    preferred_seasons    VARCHAR(128),
+
+    -- LLM 自动提取的待确认字段
+    suggested_fields     JSON COMMENT '{"interests":["美食"]} —— 待用户确认',
+
+    -- 元数据
+    source              VARCHAR(16) DEFAULT 'manual' COMMENT 'manual / llm_extract',
+    created_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_active_at      TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='用户画像——长期记忆，永久保存，可手动编辑或 LLM 建议 + 用户确认';

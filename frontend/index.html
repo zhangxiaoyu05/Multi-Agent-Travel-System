@@ -300,6 +300,29 @@
 
   .toast.error { background: var(--danger); }
 
+  /* Summary Banner */
+  .summary-banner {
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: var(--radius-sm);
+    margin: 0 24px 8px;
+    font-size: 13px;
+  }
+  .summary-toggle {
+    padding: 8px 14px;
+    cursor: pointer;
+    font-weight: 500;
+    color: #0369a1;
+    user-select: none;
+  }
+  .summary-content {
+    padding: 8px 14px 14px;
+    white-space: pre-wrap;
+    line-height: 1.6;
+    border-top: 1px solid #bae6fd;
+  }
+  .summary-content.hidden { display: none; }
+
   /* Scrollbar */
   ::-webkit-scrollbar { width: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -353,7 +376,7 @@
     <div class="conversation-list" id="convList"></div>
 
     <div class="sidebar-footer">
-      <div class="sidebar-user">
+      <div class="sidebar-user" onclick="window.location.href='/static/profile.html'" style="cursor:pointer;" title="编辑用户画像">
         <span class="user-avatar" id="userAvatar">👤</span>
         <span id="sidebarUsername">用户</span>
       </div>
@@ -711,13 +734,31 @@ const Chat = {
     this._clear();
     try {
       const data = await api('GET', `/conversations/${convId}/messages`);
+      // 显示摘要（如果有）
+      if (data.summary) {
+        this._renderSummaryBanner(data.summary);
+      }
       if (data.messages && data.messages.length) {
-        data.messages.forEach(m => this._render(m));
+        data.messages.forEach(m => this._render({
+          role: m.role,
+          content: m.content,
+          branch: m.branch,
+          intentScores: m.intent_scores,
+          created_at: m.created_at,
+        }));
       }
     } catch (e) {
       // History not available, show empty
     }
     this._showEmpty();
+  },
+
+  _renderSummaryBanner(summary) {
+    const container = document.getElementById('chatMessages');
+    const div = document.createElement('div');
+    div.className = 'summary-banner';
+    div.innerHTML = `<div class="summary-toggle" onclick="this.nextElementSibling.classList.toggle('hidden')">📝 对话摘要 (点击展开/收起)</div><div class="summary-content hidden">${escapeHtml(summary)}</div>`;
+    container.appendChild(div);
   },
 
   async send() {

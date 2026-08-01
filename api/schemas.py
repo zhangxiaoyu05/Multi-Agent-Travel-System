@@ -59,3 +59,107 @@ class CreateConversationResponse(BaseModel):
     """新建对话响应"""
     conversation_id: str
     title: str
+
+
+# =============================================================================
+# 记忆系统——短/中/长期记忆模型
+# =============================================================================
+
+
+class BudgetRange(BaseModel):
+    """预算区间"""
+    min: Optional[int] = None
+    max: Optional[int] = None
+    currency: str = "USD"
+
+
+class UserProfileResponse(BaseModel):
+    """GET /profile 响应——用户画像完整数据"""
+    user_id: str
+    username: str
+    # 基本信息
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    # 旅行身份
+    nationality: Optional[str] = None
+    passport_country: Optional[str] = None
+    preferred_language: str = "zh"
+    # 深度旅行偏好
+    preferred_destinations: list[str] = Field(default_factory=list)
+    budget_range: Optional[BudgetRange] = None
+    travel_style: Optional[str] = None          # 轻松/适中/紧凑
+    interests: list[str] = Field(default_factory=list)
+    travel_companion: Optional[str] = None      # solo/family/couple/friends
+    special_needs: list[str] = Field(default_factory=list)
+    preferred_seasons: list[str] = Field(default_factory=list)
+    # LLM 待确认建议
+    suggested_fields: Optional[dict] = None
+    # 元数据
+    source: str = "manual"
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_active_at: Optional[str] = None
+
+
+class UserProfileUpdateRequest(BaseModel):
+    """PUT /profile 请求——用户手动编辑画像"""
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    nationality: Optional[str] = None
+    passport_country: Optional[str] = None
+    preferred_language: Optional[str] = None
+    preferred_destinations: Optional[list[str]] = None
+    budget_range: Optional[BudgetRange] = None
+    travel_style: Optional[str] = None
+    interests: Optional[list[str]] = None
+    travel_companion: Optional[str] = None
+    special_needs: Optional[list[str]] = None
+    preferred_seasons: Optional[list[str]] = None
+    # 是否同时接受 LLM 建议
+    accept_suggestions: bool = False
+
+
+class PendingUpdateResponse(BaseModel):
+    """LLM 建议的用户偏好更新项"""
+    field: str
+    current_value: Optional[str] = None
+    suggested_value: Optional[str] = None
+    confidence: float = 0.5
+    reason: Optional[str] = None
+
+
+class PreferenceSnapshotResponse(BaseModel):
+    """中期记忆偏好快照"""
+    id: int
+    source_conversation_id: Optional[str] = None
+    preferred_destinations: list[str] = Field(default_factory=list)
+    budget_range: Optional[str] = None
+    travel_style: Optional[str] = None
+    interests: list[str] = Field(default_factory=list)
+    travel_companion: Optional[str] = None
+    special_needs: Optional[str] = None
+    preferred_seasons: Optional[str] = None
+    confidence: float = 0.5
+    is_promoted: bool = False
+    created_at: Optional[str] = None
+    expire_at: Optional[str] = None
+
+
+class ChatMessageItem(BaseModel):
+    """单条历史消息"""
+    role: str                        # user / agent
+    content: str
+    branch: Optional[str] = None
+    intent_scores: Optional[dict] = None
+    created_at: Optional[str] = None
+
+
+class ConversationMessagesResponse(BaseModel):
+    """GET /conversations/{id}/messages 增强响应"""
+    conversation_id: str
+    messages: list[ChatMessageItem]
+    summary: Optional[str] = None

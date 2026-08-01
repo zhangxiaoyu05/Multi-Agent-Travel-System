@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用户画像 · 入境定制游</title>
+<style>
+  :root {
+    --bg: #f5f5f5;
+    --surface: #ffffff;
+    --sidebar-bg: #1e1e2e;
+    --sidebar-text: #cdd6f4;
+    --sidebar-muted: #6c7086;
+    --border: #e4e7ed;
+    --text: #303133;
+    --text-secondary: #909399;
+    --primary: #6366f1;
+    --primary-light: #eef2ff;
+    --primary-hover: #4f46e5;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+    --transition: 0.2s ease;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .topbar-logo {
+    font-size: 22px;
+  }
+  .topbar-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .btn-back {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    transition: all var(--transition);
+    color: var(--text);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .btn-back:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: #fff;
+    padding: 10px 24px;
+    border-radius: 20px;
+    font-size: 13px;
+    z-index: 2000;
+    animation: fadeInOut 3s forwards;
+  }
+  @keyframes fadeInOut {
+    0% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+    10% { opacity: 1; transform: translateX(-50%) translateY(0); }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  .toast.error { background: var(--danger); }
+
+  /* Main Content */
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 28px 24px;
+  }
+  .page-title {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .page-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 28px;
+  }
+
+  /* Sections */
+  .section {
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-header h3 {
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-header .icon {
+    font-size: 18px;
+  }
+
+  /* Form Grid */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 640px) {
+    .form-grid { grid-template-columns: 1fr; }
+  }
+  .form-field {
+    display: flex;
+    flex-direction: column;
+  }
+  .form-field.full { grid-column: 1 / -1; }
+  .form-field label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+  .form-field input,
+  .form-field select,
+  .form-field textarea {
+    padding: 9px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xs);
+    font-size: 14px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color var(--transition);
+    background: var(--surface);
+  }
+  .form-field input:focus,
+  .form-field select:focus,
+  .form-field textarea:focus {
+    border-color: var(--primary);
+  }
+  .form-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 3px;
+  }
+
+  /* Preference Tags */
+  .tag-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-size: 12px;
+    background: var(--primary-light);
+    color: var(--primary);
+    border: 1px solid #c7d2fe;
+  }
+  .tag .tag-remove {
+    cursor: pointer;
+    font-size: 10px;
+    opacity: 0.5;
+  }
+  .tag .tag-remove:hover { opacity: 1; }
+
+  /* Suggested Updates */
+  .suggestion-banner {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: var(--radius-sm);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+  }
+  .suggestion-banner h4 {
+    font-size: 14px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .suggestion-item {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .suggestion-item .si-field {
+    font-weight: 500;
+    color: var(--text);
+    margin-right: 8px;
+  }
+  .suggestion-item .si-change {
+    color: var(--text-secondary);
+    flex: 1;
+  }
+  .suggestion-item .si-arrow {
+    color: var(--warning);
+    margin: 0 6px;
+  }
+  .btn-sm {
+    padding: 4px 12px;
+    border-radius: var(--radius-xs);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    transition: all var(--transition);
+  }
+  .btn-accept {
+    background: var(--success);
+    color: #fff;
+    border-color: var(--success);
+  }
+  .btn-accept:hover { opacity: 0.85; }
+  .btn-reject {
+    background: #fff;
+    color: var(--text-secondary);
+  }
+  .btn-reject:hover { color: var(--danger); border-color: var(--danger); }
+
+  /* Footer Buttons */
+  .form-footer {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 28px;
+  }
+  .btn-primary {
+    padding: 10px 28px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background var(--transition);
+  }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-secondary {
+    padding: 10px 28px;
+    background: #f0f0f0;
+    color: var(--text);
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background var(--transition);
+  }
+  .btn-secondary:hover { background: #e0e0e0; }
+
+  /* Loading */
+  .loading { text-align: center; color: var(--text-secondary); padding: 40px 0; font-size: 14px; }
+
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-logo">✈️</span>
+    <span class="topbar-title">用户画像</span>
+  </div>
+  <div class="topbar-right">
+    <span style="font-size:13px;color:var(--text-secondary);" id="topUsername"></span>
+    <a href="/" class="btn-back">← 返回对话</a>
+  </div>
+</div>
+
+<div class="container" id="app">
+  <div class="loading" id="loading">加载中...</div>
+</div>
+
+<script>
+// =============================================================================
+// Helpers
+// =============================================================================
+const API_BASE = '';
+const TOKEN = localStorage.getItem('token');
+const USERNAME = localStorage.getItem('username') || '用户';
+
+document.getElementById('topUsername').textContent = USERNAME;
+
+if (!TOKEN) {
+  window.location.href = '/';
+}
+
+function showToast(msg, isError) {
+  const t = document.createElement('div');
+  t.className = 'toast' + (isError ? ' error' : '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+async function api(method, path, body) {
+  const headers = {'Content-Type': 'application/json'};
+  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  const opts = {method, headers};
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(API_BASE + path, opts);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.detail || 'HTTP ' + resp.status);
+  return data;
+}
+
+// =============================================================================
+// Profile Manager
+// =============================================================================
+const Profile = {
+  _data: null,
+  _suggestions: [],
+
+  async init() {
+    try {
+      this._data = await api('GET', '/profile');
+      try {
+        this._suggestions = await api('GET', '/profile/suggestions');
+      } catch (e) {
+        this._suggestions = [];
+      }
+      this._render();
+    } catch (e) {
+      document.getElementById('loading').textContent = '加载失败: ' + e.message;
+    }
+  },
+
+  _render() {
+    const d = this._data || {};
+    const tags = {
+      destinations: (d.preferred_destinations || []).join(', '),
+      interests: (d.interests || []).join(', '),
+      seasons: (d.preferred_seasons || []).join(', '),
+      needs: (d.special_needs || []).join(', '),
+    };
+
+    let budgetMin = '', budgetMax = '', budgetCurrency = 'USD';
+    if (d.budget_range && typeof d.budget_range === 'object') {
+      budgetMin = d.budget_range.min || '';
+      budgetMax = d.budget_range.max || '';
+      budgetCurrency = d.budget_range.currency || 'USD';
+    }
+
+    let html = '';
+
+    // Suggestions banner
+    if (this._suggestions.length > 0) {
+      html += `<div class="suggestion-banner">
+        <h4>🤖 AI 从您的对话中发现以下偏好更新（待确认）</h4>`;
+      this._suggestions.forEach(s => {
+        html += `<div class="suggestion-item">
+          <span class="si-field">${Profile._fieldLabel(s.field)}</span>
+          <span class="si-arrow">→</span>
+          <span class="si-change">${s.suggested_value || '(空)'}</span>
+        </div>`;
+      });
+      html += `<div style="margin-top:12px;display:flex;gap:8px;">
+        <button onclick="Profile.acceptAll()" class="btn-sm btn-accept">✓ 全部采纳</button>
+        <button onclick="Profile.rejectAll()" class="btn-sm btn-reject">✕ 全部忽略</button>
+      </div></div>`;
+    }
+
+    // Basic Info Section
+    html += `<div class="section">
+      <div class="section-header"><h3><span class="icon">👤</span>基本信息</h3></div>
+      <div class="form-grid">
+        <div class="form-field">
+          <label>显示名称</label>
+          <input id="f-display-name" value="${Profile._esc(d.display_name || '')}" placeholder="你的称呼">
+        </div>
+        <div class="form-field">
+          <label>邮箱</label>
+          <input id="f-email" type="email" value="${Profile._esc(d.email || '')}" placeholder="email@example.com">
+        </div>
+        <div class="form-field">
+          <label>手机号</label>
+          <input id="f-phone" value="${Profile._esc(d.phone || '')}" placeholder="+86 13800000000">
+        </div>
+        <div class="form-field">
+          <label>国籍</label>
+          <input id="f-nationality" value="${Profile._esc(d.nationality || '')}" placeholder="如: 美国、日本">
+        </div>
+        <div class="form-field">
+          <label>护照签发国</label>
+          <input id="f-passport" value="${Profile._esc(d.passport_country || '')}" placeholder="护照签发国家">
+        </div>
+        <div class="form-field">
+          <label>首选语言</label>
+          <select id="f-language">
+            <option value="zh" ${d.preferred_language==='zh'?'selected':''}>中文</option>
+            <option value="en" ${d.preferred_language==='en'?'selected':''}>English</option>
+            <option value="ja" ${d.preferred_language==='ja'?'selected':''}>日本語</option>
+            <option value="ko" ${d.preferred_language==='ko'?'selected':''}>한국어</option>
+          </select>
+        </div>
+      </div>
+    </div>`;
+
+    // Travel Preferences Section
+    html += `<div class="section">
+      <div class="section-header"><h3><span class="icon">🗺️</span>旅行偏好</h3><span style="font-size:11px;color:var(--text-secondary);">LLM 自动发现 + 你可手动编辑</span></div>
+      <div class="form-grid">
+        <div class="form-field full">
+          <label>意向目的地（逗号分隔）</label>
+          <input id="f-destinations" value="${Profile._esc(tags.destinations)}" placeholder="北京, 西安, 成都, 三亚">
+          <div class="form-hint">LLM 会自动从对话中提取新的目的地建议</div>
+        </div>
+        <div class="form-field">
+          <label>预算下限</label>
+          <input id="f-budget-min" type="number" value="${budgetMin}" placeholder="如 1000">
+        </div>
+        <div class="form-field">
+          <label>预算上限</label>
+          <input id="f-budget-max" type="number" value="${budgetMax}" placeholder="如 3000">
+        </div>
+        <div class="form-field">
+          <label>预算币种</label>
+          <select id="f-currency">
+            <option value="USD" ${budgetCurrency==='USD'?'selected':''}>USD (美元)</option>
+            <option value="CNY" ${budgetCurrency==='CNY'?'selected':''}>CNY (人民币)</option>
+            <option value="EUR" ${budgetCurrency==='EUR'?'selected':''}>EUR (欧元)</option>
+            <option value="JPY" ${budgetCurrency==='JPY'?'selected':''}>JPY (日元)</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>旅行节奏</label>
+          <select id="f-style">
+            <option value="" ${!d.travel_style?'selected':''}>未设置</option>
+            <option value="轻松" ${d.travel_style==='轻松'?'selected':''}>轻松 —— 慢节奏、深度游</option>
+            <option value="适中" ${d.travel_style==='适中'?'selected':''}>适中 —— 平衡</option>
+            <option value="紧凑" ${d.travel_style==='紧凑'?'selected':''}>紧凑 —— 多看景点</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>同行人</label>
+          <select id="f-companion">
+            <option value="" ${!d.travel_companion?'selected':''}>未设置</option>
+            <option value="solo" ${d.travel_companion==='solo'?'selected':''}>独自旅行</option>
+            <option value="family" ${d.travel_companion==='family'?'selected':''}>家庭 / 亲子</option>
+            <option value="couple" ${d.travel_companion==='couple'?'selected':''}>情侣</option>
+            <option value="friends" ${d.travel_companion==='friends'?'selected':''}>朋友结伴</option>
+          </select>
+        </div>
+        <div class="form-field full">
+          <label>兴趣标签（逗号分隔）</label>
+          <input id="f-interests" value="${Profile._esc(tags.interests)}" placeholder="历史文化, 自然风光, 美食, 购物, 探险">
+          <div class="form-hint">可选：历史文化 / 自然风光 / 美食 / 购物 / 探险 / 摄影 / 亲子 / 研学</div>
+        </div>
+        <div class="form-field full">
+          <label>特殊需求（逗号分隔）</label>
+          <input id="f-needs" value="${Profile._esc(tags.needs)}" placeholder="素食, 轮椅, 儿童座椅, 过敏源">
+        </div>
+        <div class="form-field full">
+          <label>偏好旅行季节（逗号分隔）</label>
+          <input id="f-seasons" value="${Profile._esc(tags.seasons)}" placeholder="春季, 秋季">
+          <div class="form-hint">可选：春季 / 夏季 / 秋季 / 冬季 / 暑假 / 寒假 / 国庆</div>
+        </div>
+      </div>
+    </div>`;
+
+    // Footer
+    html += `<div class="form-footer">
+      <button class="btn-secondary" onclick="window.location.href='/'">取消</button>
+      <button class="btn-primary" onclick="Profile.save()">💾 保存画像</button>
+    </div>`;
+
+    document.getElementById('app').innerHTML = html;
+  },
+
+  async save() {
+    const budgetMin = document.getElementById('f-budget-min').value;
+    const budgetMax = document.getElementById('f-budget-max').value;
+    const budgetCurrency = document.getElementById('f-currency').value;
+
+    const body = {
+      display_name: document.getElementById('f-display-name').value || null,
+      email: document.getElementById('f-email').value || null,
+      phone: document.getElementById('f-phone').value || null,
+      nationality: document.getElementById('f-nationality').value || null,
+      passport_country: document.getElementById('f-passport').value || null,
+      preferred_language: document.getElementById('f-language').value,
+      preferred_destinations: Profile._parseList('f-destinations'),
+      budget_range: (budgetMin || budgetMax) ? {
+        min: budgetMin ? parseInt(budgetMin) : null,
+        max: budgetMax ? parseInt(budgetMax) : null,
+        currency: budgetCurrency,
+      } : null,
+      travel_style: document.getElementById('f-style').value || null,
+      interests: Profile._parseList('f-interests'),
+      travel_companion: document.getElementById('f-companion').value || null,
+      special_needs: Profile._parseList('f-needs'),
+      preferred_seasons: Profile._parseList('f-seasons'),
+      accept_suggestions: false,
+    };
+
+    try {
+      await api('PUT', '/profile', body);
+      showToast('画像已保存 ✓');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e) {
+      showToast('保存失败: ' + e.message, true);
+    }
+  },
+
+  async acceptAll() {
+    try {
+      await api('POST', '/profile/suggestions/accept');
+      showToast('AI 建议已采纳 ✓');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e) {
+      showToast('采纳失败: ' + e.message, true);
+    }
+  },
+
+  async rejectAll() {
+    try {
+      await api('POST', '/profile/suggestions/reject');
+      showToast('建议已忽略');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (e) {
+      showToast('操作失败: ' + e.message, true);
+    }
+  },
+
+  _parseList(id) {
+    const val = document.getElementById(id).value.trim();
+    if (!val) return [];
+    return val.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  },
+
+  _esc(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  },
+
+  _fieldLabel(f) {
+    const m = {
+      preferred_destinations: '意向目的地',
+      budget_range: '预算范围',
+      travel_style: '旅行节奏',
+      interests: '兴趣标签',
+      travel_companion: '同行人',
+      special_needs: '特殊需求',
+      preferred_seasons: '偏好季节',
+    };
+    return m[f] || f;
+  },
+};
+
+// Init
+(async function() {
+  if (TOKEN) {
+    await Profile.init();
+  }
+})();
+</script>
+
+</body>
+</html>

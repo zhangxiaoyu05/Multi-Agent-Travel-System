@@ -27,6 +27,8 @@
 > 
 > 🛡️ **意图预过滤**：能力询问/寒暄/道谢类消息跳过 LLM，正则匹配后直接免转人工路由到客服——消除 LLM hallucinate `need_human=true` 导致的误判。
 >
+> 🧠 **三层记忆系统**：短期（Redis+MySQL 对话缓存，切换窗口不丢失，上下文窗口自动摘要）、中期（LLM 提取旅行偏好，60 天 TTL）、长期（用户画像永久保存，/profile 页面可编辑，LLM 建议→用户确认）。
+>
 > 🎨 **Markdown 渲染**：AI 回复使用原生 Markdown 格式（标题/分隔线/列表/代码块/粗体），前端块级解析引擎渲染，告别 ASCII `====`/`----` 符号。
 
 ## 技术栈
@@ -104,10 +106,11 @@ Multi_Agent/
 │   └── capi_real.py       # 真实 CAPI API 骨架
 ├── services/              # 基础设施
 │   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max）
+│   ├── memory.py          # 🆕 短/中/长期记忆管理器（消息双写 + Token估算 + 偏好提取 + 画像CRUD）
 │   ├── embeddings.py      # Embedding（text-embedding-v4，DashScope 原生 API）
 │   ├── vector_store.py    # 向量存储（Milvus + HNSW 索引）
 │   ├── mysql.py           # MySQL 连接池（SQLAlchemy async）
-│   ├── redis.py           # Redis 缓存（会话历史 + 摘要）
+│   ├── redis.py           # Redis 缓存（会话历史 + 摘要 + 消息 + 画像）
 │   ├── checkpoint.py      # MySQL Checkpoint Saver（LangGraph 持久化）
 │   └── user_store.py      # 用户/对话数据库操作
 ├── scripts/               # 运维脚本
@@ -115,14 +118,17 @@ Multi_Agent/
 │   ├── ingest_knowledge.py # 知识库摄入脚本（Milvus）
 │   └── migrate_mysql.sql  # MySQL 初始化 DDL
 ├── frontend/              # 前端页面
-│   └── index.html         # 聊天界面（仿 DeepSeek 布局 + 登录/多对话）
-├── prompts/               # System Prompt 模板（5 个）
+│   ├── index.html         # 聊天界面（仿 DeepSeek 布局 + 登录/多对话）
+│   └── profile.html       # 🆕 用户画像页面（编辑偏好 + AI 建议确认）
+├── prompts/               # System Prompt 模板（7 个）
 │   ├── intent_router.txt
 │   ├── customer_service.txt
 │   ├── trip_planner.txt
 │   ├── sales_agent.txt
-│   └── operations_agent.txt
-├── tests/                 # 单元测试（177 个用例）
+│   ├── operations_agent.txt
+│   ├── summary.txt            # 🆕 对话摘要 Prompt
+│   └── preference_extract.txt # 🆕 偏好提取 Prompt
+├── tests/                 # 单元测试（193 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
 │   ├── test_graph.py
@@ -210,7 +216,7 @@ python -m api.main test --quick   # 快速模式（跳过行程生成）
 | `GET` | `/conversations` | 获取当前用户的对话列表 |
 | `POST` | `/conversations` | 新建对话 |
 | `DELETE` | `/conversations/{id}` | 删除对话（同时清理 checkpoint） |
-| `GET` | `/conversations/{id}/messages` | 获取对话历史消息 |
+| `GET` | `/conversations/{id}/messages` | 获取对话历史消息（含摘要，Redis→MySQL→Checkpoint 三级回退） |
 
 ### `GET /health`
 
@@ -245,10 +251,28 @@ event: done            → {完整 ChatResponse}
 
 > `/chat/stream` 暂不可用时前端自动降级回退到 `/chat` 普通 JSON 模式。
 
+### 用户画像（需认证）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/profile` | 获取当前用户画像（基础信息 + 旅行偏好 + LLM 建议） |
+| `PUT` | `/profile` | 更新画像（可同时 `accept_suggestions: true` 采纳 AI 建议） |
+| `GET` | `/profile/suggestions` | 获取 LLM 待确认的画像更新建议 |
+| `POST` | `/profile/suggestions/accept` | 采纳所有 LLM 建议 → 合并到画像主字段 |
+| `POST` | `/profile/suggestions/reject` | 忽略所有 LLM 建议 |
+| `GET` | `/preferences` | 获取 LLM 自动提取的中期偏好快照 |
+
+### 页面路由
+
+| 路径 | 说明 |
+|------|------|
+| `/` | 聊天主界面 |
+| `/profile` | 用户画像编辑页 |
+
 ## 测试
 
 ```bash
-# 运行全部 177 个单元测试（~8s，含异步测试 + auth/API/SSE）
+# 运行全部 193 个单元测试（~8s，含异步测试 + auth/API/SSE + 记忆系统）
 python -m pytest tests/ -v
 
 # 运行端到端集成测试
@@ -320,6 +344,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 8 | 基础设施升级（MySQL + Redis + Docker 全容器化） | ✅ |
 | Phase 9 | SSE 流式输出（进度推送 + 降级兼容） | ✅ |
 | Phase 10 | 意图路由预过滤 + Markdown 渲染引擎 + AI 回复格式美化 + 消息框对齐 | ✅ |
+| Phase 11 | 短/中/长期记忆系统（Redis 缓存 + MySQL 持久化 + 上下文窗口管理 + LLM 偏好提取 + 用户画像） | ✅ |
 
 ## 许可证
 

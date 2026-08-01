@@ -16,6 +16,7 @@ import sys
 import json
 import time
 import uuid
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 from api.schemas import (
     ChatRequest, ChatResponse, TripDraftResponse,
     ConversationItem, CreateConversationRequest, CreateConversationResponse,
+    UserProfileResponse, UserProfileUpdateRequest,
+    PendingUpdateResponse, PreferenceSnapshotResponse,
+    ConversationMessagesResponse, ChatMessageItem,
+    BudgetRange,
 )
 from api.dependencies import get_current_user
 from graph.builder import build_graph
@@ -137,6 +142,82 @@ async def lifespan(app: FastAPI):
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """))
 
+        # 记忆系统表
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    conversation_id VARCHAR(64) NOT NULL,
+                    role            VARCHAR(16) NOT NULL,
+                    content         TEXT        NOT NULL,
+                    branch          VARCHAR(32),
+                    intent_scores   JSON,
+                    draft           JSON,
+                    metadata        JSON,
+                    created_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_conv_time (conversation_id, created_at),
+                    INDEX idx_created (created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS chat_summaries (
+                    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    conversation_id VARCHAR(64) NOT NULL,
+                    summary         TEXT        NOT NULL,
+                    from_round      INT         NOT NULL,
+                    to_round        INT         NOT NULL,
+                    token_count     INT,
+                    created_at      TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_conv (conversation_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id             VARCHAR(64) NOT NULL,
+                    preferred_destinations JSON,
+                    budget_range        VARCHAR(32),
+                    travel_style        VARCHAR(20),
+                    interests           JSON,
+                    travel_companion    VARCHAR(20),
+                    special_needs       VARCHAR(255),
+                    preferred_seasons   VARCHAR(128),
+                    language_pref       VARCHAR(8)  DEFAULT 'zh',
+                    source_conversation_id VARCHAR(64),
+                    confidence          FLOAT       DEFAULT 0.5,
+                    expire_at           TIMESTAMP,
+                    created_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_user (user_id),
+                    INDEX idx_expire (expire_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    user_id             VARCHAR(64) PRIMARY KEY,
+                    display_name        VARCHAR(64),
+                    avatar_url          VARCHAR(255),
+                    email               VARCHAR(128),
+                    phone               VARCHAR(32),
+                    nationality         VARCHAR(64),
+                    passport_country    VARCHAR(64),
+                    preferred_language  VARCHAR(8)  DEFAULT 'zh',
+                    preferred_destinations JSON,
+                    budget_range         VARCHAR(32),
+                    travel_style         VARCHAR(20),
+                    interests            JSON,
+                    travel_companion     VARCHAR(20),
+                    special_needs        VARCHAR(255),
+                    preferred_seasons    VARCHAR(128),
+                    suggested_fields     JSON,
+                    source              VARCHAR(16) DEFAULT 'manual',
+                    created_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at          TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    last_active_at      TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+
         logger.info("MySQL business tables verified")
     except Exception as e:
         logger.warning(f"业务表初始化跳过: {e}")
@@ -147,7 +228,32 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Embedding:   {os.getenv('EMBEDDING_MODEL', 'text-embedding-v4')}")
     logger.info(f"  Checkpoint:  {os.getenv('CHECKPOINT_BACKEND', 'mysql')}")
 
+    # 后台定期清理过期数据（每小时一次）
+    async def _periodic_cleanup():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                from services.memory import MemoryManager
+                mm = MemoryManager()
+                deleted_msgs = await mm.delete_expired_messages(before_days=7)
+                deleted_prefs = await mm.delete_expired_preferences()
+                if deleted_msgs or deleted_prefs:
+                    logger.info(
+                        f"Periodic cleanup: {deleted_msgs} messages, {deleted_prefs} preferences"
+                    )
+            except Exception as e:
+                logger.debug(f"Periodic cleanup skipped: {e}")
+
+    _cleanup_task = asyncio.create_task(_periodic_cleanup())
+
     yield
+
+    # ---- 关闭 ----
+    _cleanup_task.cancel()
+    try:
+        await _cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     # ---- 关闭 ----
     logger.info("应用关闭中...")
@@ -218,6 +324,15 @@ async def root():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return {"message": "前端页面未找到，请访问 /docs 查看 API 文档", "version": "0.3.0"}
+
+
+@app.get("/profile")
+async def profile_page():
+    """返回用户画像页面"""
+    profile_path = os.path.join(_static_dir, "profile.html")
+    if os.path.isfile(profile_path):
+        return FileResponse(profile_path)
+    return {"message": "画像页面未找到", "version": "0.3.0"}
 
 
 @app.get("/health")
@@ -317,43 +432,192 @@ async def delete_conversation(
     return {"ok": True}
 
 
-@app.get("/conversations/{conversation_id}/messages")
+@app.get("/conversations/{conversation_id}/messages", response_model=ConversationMessagesResponse)
 async def get_messages(
     conversation_id: str,
     user: dict = Depends(get_current_user),
 ):
-    """获取对话历史消息（从 LangGraph checkpoint 读取）"""
+    """获取对话历史消息（优先 Redis → MySQL → Checkpoint 回退）"""
     from services.user_store import UserStore
     store = UserStore()
     conv = await store.get_conversation(conversation_id)
     if not conv or conv["user_id"] != user["user_id"]:
         raise HTTPException(status_code=404, detail="对话不存在")
 
-    # 从 LangGraph checkpoint 加载状态
+    from services.memory import MemoryManager
+    mm = MemoryManager()
+    messages = []
+    summary = None
+
+    # 1. 尝试 Redis 缓存
     try:
-        config = {"configurable": {"thread_id": conversation_id}}
-        state = await _graph.aget_state(config)
-        if state and state.values:
-            messages = state.values.get("messages", [])
-            return {
-                "conversation_id": conversation_id,
-                "messages": [
-                    {
-                        "role": "user" if getattr(m, "type", "") == "human" else "agent",
-                        "content": getattr(m, "content", ""),
-                    }
-                    for m in messages
-                ],
-            }
+        from services.redis import get_cached_chat_messages, get_cached_chat_summary
+        cached_msgs = await get_cached_chat_messages(conversation_id)
+        if cached_msgs:
+            messages = cached_msgs
+        summary = await get_cached_chat_summary(conversation_id)
     except Exception:
         pass
 
-    return {"conversation_id": conversation_id, "messages": []}
+    # 2. Redis 未命中 → MySQL
+    if not messages:
+        try:
+            messages = await mm.get_messages(conversation_id, limit=50)
+            # 预热 Redis
+            if messages:
+                try:
+                    from services.redis import cache_chat_messages
+                    await cache_chat_messages(conversation_id, messages)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 3. 尝试从 MySQL 获取摘要
+    if not summary:
+        try:
+            summary_info = await mm.get_summary(conversation_id)
+            if summary_info:
+                summary = summary_info["summary"]
+        except Exception:
+            pass
+
+    # 4. 都不可用 → 回退到 LangGraph checkpoint
+    if not messages:
+        try:
+            config = {"configurable": {"thread_id": conversation_id}}
+            state = await _graph.aget_state(config)
+            if state and state.values:
+                checkpoint_msgs = state.values.get("messages", [])
+                messages = [
+                    {
+                        "role": "user" if getattr(m, "type", "") == "human" else "agent",
+                        "content": getattr(m, "content", ""),
+                        "branch": state.values.get("current_branch", ""),
+                    }
+                    for m in checkpoint_msgs
+                ]
+        except Exception:
+            pass
+
+    # 序列化为 ChatMessageItem
+    msg_items = [
+        ChatMessageItem(
+            role=m.get("role", "agent"),
+            content=m.get("content", ""),
+            branch=m.get("branch"),
+            intent_scores=m.get("intent_scores"),
+            created_at=m.get("created_at"),
+        )
+        for m in messages
+    ]
+
+    return ConversationMessagesResponse(
+        conversation_id=conversation_id,
+        messages=msg_items,
+        summary=summary,
+    )
 
 
 # =============================================================================
 # 核心对话接口（需认证）
 # =============================================================================
+
+
+async def _post_chat_save(
+    conversation_id: str, user_id: str, user_message: str,
+    reply: str, branch: str | None, intent_scores: dict | None,
+    draft: dict | None, quote: str | None, need_human: bool | None,
+    all_messages: list,
+):
+    """对话后处理：保存消息 + 上下文管理 + 偏好提取（异步，不阻塞响应）
+
+    在每次 /chat 或 /chat/stream 完成后调用。
+    """
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+
+        # 1. 保存用户消息
+        await mm.save_message(conversation_id, "user", user_message)
+
+        # 2. 保存 Agent 回复（附带元数据）
+        meta = {}
+        if quote:
+            meta["quote"] = quote
+        if need_human is not None:
+            meta["need_human"] = need_human
+
+        await mm.save_message(
+            conversation_id, "agent", reply,
+            branch=branch, intent_scores=intent_scores,
+            draft=draft, metadata=meta,
+        )
+
+        # 3. 更新用户最后活跃时间
+        await mm.update_last_active(user_id)
+
+        # 4. 更新 Redis 缓存
+        try:
+            from services.redis import cache_chat_messages
+            msgs = await mm.get_messages(conversation_id, limit=50)
+            if msgs:
+                await cache_chat_messages(conversation_id, msgs)
+        except Exception:
+            pass
+
+        # 5. 上下文窗口检查——需要摘要吗？
+        try:
+            from services.redis import get_cached_chat_messages
+            cached = await get_cached_chat_messages(conversation_id) or []
+            if mm.should_summarize(cached):
+                logger.info(f"Context window threshold reached for {conversation_id}, generating summary...")
+                trimmed = await mm.trim_context(conversation_id, cached)
+                await cache_chat_messages(conversation_id, trimmed)
+        except Exception:
+            pass
+
+        # 6. 每 5 轮提取一次偏好
+        try:
+            msg_count = await mm.get_message_count(conversation_id)
+            if msg_count >= 10 and msg_count % 10 < 2:  # 接近每 5 轮（10条消息）
+                logger.info(f"Extracting preferences for user {user_id} from {conversation_id}")
+                # 获取所有消息用于提取
+                all_msgs = await mm.get_messages(conversation_id, limit=30)
+                prefs = await mm.extract_preferences(user_id, conversation_id, all_msgs)
+                if prefs:
+                    await mm.save_preferences(prefs)
+
+                    # 同时更新画像的 suggested_fields
+                    profile = await mm.get_profile(user_id)
+                    if not profile:
+                        from services.user_store import UserStore
+                        store = UserStore()
+                        user_info = await store.get_conversation(conversation_id)
+                        profile = await mm.ensure_profile(user_id, user_id)
+
+                    suggested = profile.get("suggested_fields") or {}
+                    if prefs.get("preferred_destinations"):
+                        current_dests = set(profile.get("preferred_destinations", []) or [])
+                        new_dests = [d for d in prefs["preferred_destinations"] if d not in current_dests]
+                        if new_dests:
+                            suggested["preferred_destinations"] = new_dests
+                    for field in ("travel_style", "travel_companion", "budget_range", "preferred_seasons"):
+                        if prefs.get(field) and not profile.get(field):
+                            suggested[field] = prefs[field]
+                    if prefs.get("interests"):
+                        current = set(profile.get("interests", []) or [])
+                        new = [i for i in prefs["interests"] if i not in current]
+                        if new:
+                            suggested["interests"] = new
+
+                    if suggested:
+                        await mm.update_profile(user_id, {"suggested_fields": suggested})
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.debug(f"Post-chat save failed (non-critical): {e}")
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -399,12 +663,34 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 weather_summary=draft.get("weather_summary"),
             )
 
+        final_reply = result.get("final_reply", "抱歉，处理您的请求时出现了问题。")
+        current_branch = result.get("current_branch")
+        intent_scores = result.get("intent_scores")
+        need_human = result.get("need_human", False)
+        quote = result.get("quote", "")
+
+        # 异步保存消息（不阻塞响应）
+        asyncio.create_task(
+            _post_chat_save(
+                conversation_id=req.conversation_id,
+                user_id=user["user_id"],
+                user_message=req.message,
+                reply=final_reply,
+                branch=current_branch,
+                intent_scores=intent_scores,
+                draft=draft_response.model_dump() if draft_response else None,
+                quote=quote,
+                need_human=need_human,
+                all_messages=[],
+            )
+        )
+
         return ChatResponse(
-            reply=result.get("final_reply", "抱歉，处理您的请求时出现了问题。"),
-            current_branch=result.get("current_branch"),
+            reply=final_reply,
+            current_branch=current_branch,
             draft=draft_response,
-            need_human=result.get("need_human", False),
-            intent_scores=result.get("intent_scores"),
+            need_human=need_human,
+            intent_scores=intent_scores,
         )
 
     except Exception as e:
@@ -506,6 +792,22 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                     "quote": final_state.get("quote"),
                 }
                 yield f"event: done\ndata: {json.dumps(resp, ensure_ascii=False)}\n\n"
+
+                # 异步保存消息（不阻塞 SSE 流）
+                asyncio.create_task(
+                    _post_chat_save(
+                        conversation_id=req.conversation_id,
+                        user_id=user["user_id"],
+                        user_message=req.message,
+                        reply=resp["reply"],
+                        branch=resp.get("current_branch"),
+                        intent_scores=resp.get("intent_scores"),
+                        draft=draft_resp,
+                        quote=resp.get("quote"),
+                        need_human=resp.get("need_human"),
+                        all_messages=[],
+                    )
+                )
             else:
                 yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
 
@@ -522,6 +824,190 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# =============================================================================
+# 用户画像——长期记忆（需认证）
+# =============================================================================
+
+
+@app.get("/profile", response_model=UserProfileResponse)
+async def get_profile(user: dict = Depends(get_current_user)):
+    """获取当前用户的完整画像（含 LLM 建议）"""
+    try:
+        from services.redis import get_cached_user_profile, cache_user_profile
+        # 1. 尝试 Redis 缓存
+        cached = await get_cached_user_profile(user["user_id"])
+        if cached:
+            return UserProfileResponse(**cached)
+
+        # 2. MySQL 查询
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        profile = await mm.ensure_profile(user["user_id"], user.get("username", ""))
+        profile["username"] = user.get("username", "")
+
+        # 3. 缓存到 Redis
+        await cache_user_profile(user["user_id"], profile)
+
+        return UserProfileResponse(**profile)
+
+    except Exception as e:
+        logger.exception(f"获取画像失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取画像失败: {str(e)}")
+
+
+@app.put("/profile", response_model=UserProfileResponse)
+async def update_profile(
+    req: UserProfileUpdateRequest,
+    user: dict = Depends(get_current_user),
+):
+    """更新用户画像（手动编辑或接受 LLM 建议）"""
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+
+        # 确保画像存在
+        await mm.ensure_profile(user["user_id"], user.get("username", ""))
+
+        # 收集要更新的字段
+        updates = {}
+        for field_name, value in req.model_dump(exclude_none=True, exclude={"accept_suggestions"}).items():
+            if value is not None:
+                updates[field_name] = value
+
+        if updates:
+            updates["source"] = "manual"
+            await mm.update_profile(user["user_id"], updates)
+
+        # 如果用户选择接受 LLM 建议
+        if req.accept_suggestions:
+            await mm.merge_suggestions(user["user_id"])
+
+        # 清除 Redis 缓存
+        try:
+            from services.redis import invalidate_user_cache
+            await invalidate_user_cache(user["user_id"])
+        except Exception:
+            pass
+
+        # 返回最新画像
+        profile = await mm.get_profile(user["user_id"])
+        profile["username"] = user.get("username", "")
+        return UserProfileResponse(**profile)
+
+    except Exception as e:
+        logger.exception(f"更新画像失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新画像失败: {str(e)}")
+
+
+@app.get("/profile/suggestions", response_model=list[PendingUpdateResponse])
+async def get_pending_suggestions(user: dict = Depends(get_current_user)):
+    """获取 LLM 建议的待确认画像更新"""
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        profile = await mm.get_profile(user["user_id"])
+        if not profile:
+            return []
+
+        suggested = profile.get("suggested_fields")
+        if not suggested or not isinstance(suggested, dict):
+            return []
+
+        items = []
+        for field, value in suggested.items():
+            current = profile.get(field)
+            items.append(PendingUpdateResponse(
+                field=field,
+                current_value=str(current)[:200] if current else None,
+                suggested_value=str(value)[:200] if value else None,
+                confidence=0.6,
+                reason=f"LLM 从您的对话中发现新偏好",
+            ))
+        return items
+
+    except Exception as e:
+        logger.exception(f"获取建议失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取建议失败: {str(e)}")
+
+
+@app.post("/profile/suggestions/accept")
+async def accept_suggestions(user: dict = Depends(get_current_user)):
+    """采纳所有 LLM 建议——合并到画像主字段"""
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        profile = await mm.merge_suggestions(user["user_id"])
+        if not profile:
+            raise HTTPException(status_code=404, detail="画像不存在")
+
+        # 清除缓存
+        try:
+            from services.redis import invalidate_user_cache
+            await invalidate_user_cache(user["user_id"])
+        except Exception:
+            pass
+
+        profile["username"] = user.get("username", "")
+        return {"ok": True, "profile": UserProfileResponse(**profile)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"采纳建议失败: {e}")
+        raise HTTPException(status_code=500, detail=f"采纳建议失败: {str(e)}")
+
+
+@app.post("/profile/suggestions/reject")
+async def reject_suggestions(user: dict = Depends(get_current_user)):
+    """拒绝所有 LLM 建议——清空 suggested_fields"""
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        await mm.reject_suggestions(user["user_id"])
+
+        try:
+            from services.redis import invalidate_user_cache
+            await invalidate_user_cache(user["user_id"])
+        except Exception:
+            pass
+
+        return {"ok": True}
+    except Exception as e:
+        logger.exception(f"拒绝建议失败: {e}")
+        raise HTTPException(status_code=500, detail=f"拒绝建议失败: {str(e)}")
+
+
+@app.get("/preferences", response_model=list[PreferenceSnapshotResponse])
+async def get_preferences(user: dict = Depends(get_current_user)):
+    """获取用户的中期偏好快照（LLM 自动提取）"""
+    try:
+        from services.memory import MemoryManager
+        mm = MemoryManager()
+        snapshots = await mm.get_active_preferences(user["user_id"])
+
+        return [
+            PreferenceSnapshotResponse(
+                id=s["id"],
+                source_conversation_id=s["source_conversation_id"],
+                preferred_destinations=s.get("preferred_destinations", []),
+                budget_range=s.get("budget_range"),
+                travel_style=s.get("travel_style"),
+                interests=s.get("interests", []),
+                travel_companion=s.get("travel_companion"),
+                special_needs=s.get("special_needs"),
+                preferred_seasons=s.get("preferred_seasons"),
+                confidence=s.get("confidence", 0.5),
+                is_promoted=s.get("is_promoted", False),
+                created_at=s.get("created_at"),
+                expire_at=s.get("expire_at"),
+            )
+            for s in snapshots
+        ]
+    except Exception as e:
+        logger.exception(f"获取偏好失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取偏好失败: {str(e)}")
 
 
 # =============================================================================
