@@ -15,6 +15,9 @@ _PROMPT_DIR = os.path.dirname(__file__)
 _LANG_INSTRUCTIONS = {
     "zh": "",  # 中文是默认训练语言，无需额外指令
     "en": "\n\n[Language] You MUST respond in English only. All replies must be in English.",
+    "hi": "\n\n[Language] आपको केवल हिंदी में ही उत्तर देना है। सभी उत्तर हिंदी में होने चाहिए।",
+    "es": "\n\n[Language] DEBES responder únicamente en español. Todas las respuestas deben estar en español.",
+    "ar": "\n\n[Language] يجب عليك الرد باللغة العربية فقط. يجب أن تكون جميع الردود باللغة العربية.",
     "ja": "\n\n[Language] 必ず日本語のみで回答してください。すべての返信は日本語で行ってください。",
     "ko": "\n\n[Language] 반드시 한국어로만 응답하세요. 모든 답변은 한국어로 작성해야 합니다.",
 }

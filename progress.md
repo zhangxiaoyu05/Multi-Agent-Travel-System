@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01（Phase 13 完成）
+> 最后更新：2026-08-01（Phase 13-续 语言选择器恢复）
 
 ---
 
@@ -524,6 +524,51 @@ Chrome DevTools E2E 测试发现打断功能存在上下文丢失：
 - 支持 ticket 持久化存储（离线工单表）
 - 智能客服多轮对话上下文（独立 conversation 类型）
 - 客服满意度评分
+
+---
+
+### Phase 13-续 ✅ 语言选择器恢复 + 5 种语言完整支持（2026-08-01）
+
+#### 背景
+
+前端重构（7f1e3b6）时语言选择器被移除，`language` 硬编码为 `'zh'`。但后端一直保留完整的多语言链路——`ChatRequest.language` → `AgentState.language` → `get_language_instruction()` → Agent system prompt 注入。
+
+现在恢复语言选择器，放在模式下拉框旁边并排显示，支持全球最常用的 5 种语言。
+
+#### 改动清单
+
+| 文件 | 改动 | 说明 |
+|------|:---:|------|
+| `frontend/index.html` | ~20 | CSS `.sidebar-selectors` flex 并排布局，HTML 语言 `<select>` 并列，JS `App._lang` + `switchLang()` |
+| `prompts/__init__.py` | +3 | `_LANG_INSTRUCTIONS` 新增 `hi`（हिन्दी）/ `es`（Español）/ `ar`（العربية）指令 |
+| `frontend/index.html` | -1+1 | `Chat.send()` 的 `language` 字段从 `'zh'` 改为 `App._lang` |
+
+#### 语言支持清单
+
+| 代码 | 语言 | 前端 | 系统指令 | 模型原生 |
+|------|------|:---:|:---:|:---:|
+| `zh` | 🇨🇳 中文 | ✅ | ✅（默认，无需指令） | ✅ qwen 母语 |
+| `en` | 🇬🇧 English | ✅ | ✅ | ✅ |
+| `hi` | 🇮🇳 हिन्दी | ✅ | ✅（🆕 补上） | ✅ |
+| `es` | 🇪🇸 Español | ✅ | ✅（🆕 补上） | ✅ |
+| `ar` | 🇸🇦 العربية | ✅ | ✅（🆕 补上） | ✅ |
+| `ja` | 🇯🇵 日本語 | 前端未开放 | ✅ | ✅ |
+| `ko` | 🇰🇷 한국어 | 前端未开放 | ✅ | ✅ |
+
+#### 数据流
+
+```
+用户选择 🇪🇸 Español
+  → App.switchLang("es")
+  → Chat.send() body: { language: "es", mode: ... }
+  → API initial_state["language"] = "es"
+  → Agent._get_language(state) → "es"
+  → get_language_instruction("es") → "\n[Language] DEBES responder únicamente en español..."
+  → system_prompt + lang_instr → qwen 收到强制西班牙语指令
+  → "¡Hola! ¿En qué puedo ayudarte con tu viaje?"
+```
+
+所有 4 个 Agent（customer_service / trip_planner / sales / operations）均经过 `BaseAgent._run_tool_calling_loop()` → 第 88 行统一注入语言指令，无需逐个修改。
 
 ---
 
