@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01（Phase 12 完成）
+> 最后更新：2026-08-01（Phase 13 完成）
 
 ---
 
@@ -456,6 +456,77 @@ Chrome DevTools E2E 测试发现打断功能存在上下文丢失：
 
 ---
 
+### Phase 13 ✅ 智能客服功能——模式选择器 + FAQ 检索 + 在线/离线流程（2026-08-01）
+
+#### 背景
+
+用户需要切换"行程定制"和"智能客服"两种模式。智能客服走在线/离线流程：在线用知识库 QA 对自动回复，离线走人工工单。
+
+#### 设计思路
+
+**零冗余**——系统已有完整的客服基础设施（`customer_service` agent + `search_faq` RAG + `check_handoff` + `human_handoff`），只需：
+1. 新增 `force_branch` 机制跳过意图路由
+2. 新增 `mode` 参数控制路由行为
+3. 前端添加模式选择器 + 智能客服专用 UI
+
+#### 数据流
+
+```
+用户选择"智能客服"模式
+  → 前端切换 UI（header / placeholder / 快捷 FAQ）
+  → Chat.send() 传 mode: "support"
+  → 后端 initial_state.force_branch = "customer_service"
+  → route_decision_node 优先检查 force_branch → 直接返回
+  → route_condition 跳过意图路由 → customer_service
+  → CustomerServiceAgent.run()
+      ├── search_faq (Milvus → 关键词 → 英文模糊) → 在线自动回复
+      └── check_handoff → need_human → human_handoff → 离线工单
+```
+
+#### 改动清单
+
+| 文件 | 改动 | 说明 |
+|------|:---:|------|
+| `api/schemas.py` | +3 | `ChatRequest` 新增 `mode` 字段（planner/support） |
+| `graph/state.py` | +2 | `AgentState` 新增 `force_branch` 字段 |
+| `graph/conditions/route_decision.py` | +8 | `route_decision_node` 和 `route_condition` 顶部优先检查 `force_branch` |
+| `api/main.py` | +2 | `/chat` 和 `/chat/stream` initial_state 传 `force_branch` |
+| `frontend/index.html` | +100 | CSS 模式选择器+快捷 FAQ 标签，HTML 下拉框，JS App 模块+空状态+sendQuick |
+
+**不变文件**：`agents/customer_service.py`、`graph/nodes/customer_service.py`、`graph/nodes/human_handoff.py`、`tools/rag_faq.py`、`tools/mock_handoff.py`、`prompts/customer_service.txt`、`graph/builder.py` 全部零改动。
+
+#### 在线/离线流程
+
+| 阶段 | 机制 | 说明 |
+|------|------|------|
+| **在线** | `search_faq` → Milvus 向量检索命中 | AI 从知识库检索答案并格式化回复，即时响应 |
+| **在线兜底** | Milvus 不可用 → 关键词匹配 `_FALLBACK_FAQ` | 11 类 FAQ 关键词（签证/支付/退改/天气/小费/网络/交通/安全/美食/语言/健康） |
+| **离线** | FAQ 无匹配 + 投诉关键词 → `check_handoff` | human_handoff 生成结构化交接单（紧急/普通），用户收到"专员稍后联系"通知 |
+
+#### 前端 UI 细节
+
+- **模式下拉框**：sidebar footer 上方，暗色主题适配，两选项（🗺️ 行程定制 / 🤖 智能客服）
+- **智能客服空状态**：🤖 图标 + 说明文字 + 6 个快捷 FAQ 标签（签证材料/支付方式/退改政策/天气查询/交通出行/安全须知）
+- **快捷 FAQ**：点击标签 → 自动填入消息并发送
+- **模式切换**：header 标题变化 + placeholder 变化 + 空状态变化
+
+#### Chrome DevTools E2E 验证
+
+- ✅ 页面左下角模式下拉框正确渲染
+- ✅ 切换到"智能客服"→ header 变为"🤖 智能客服"，placeholder 和空状态切换
+- ✅ 点击"签证材料"快捷标签 → 走 `service` 分支 → FAQ 检索成功 → 回复签证信息
+- ✅ 输入"我要投诉" → `customer_service` → `check_handoff` 触发 → human_handoff 生成紧急交接单（含客户ID/会话ID/意图分数/执行链审计）
+- ✅ 切换回"行程定制"→ header + placeholder + 空状态恢复原状
+- ✅ `python -m pytest tests/ -v` → 193 passed
+
+#### 下一步待优化
+
+- 支持 ticket 持久化存储（离线工单表）
+- 智能客服多轮对话上下文（独立 conversation 类型）
+- 客服满意度评分
+
+---
+
 ### 下一步：持续优化
 
 **完成时间**：2026-07-30
@@ -739,4 +810,5 @@ event: error           → {"message":"..."}
 | 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
 | 2026-08-01 | Phase 12：用户可打断功能——① 前端新增停止按钮（红色脉冲动画），AbortController 中断 SSE 流，中断气泡保留进度阶段 + ⚠ 已中断 badge；② 后端 `_event_stream()` 捕获 GeneratorExit/CancelledError 优雅处理客户端断开；③ 用户可随时中断 AI 生成、补充纠正后继续对话，上下文不丢失；④ 2 个文件改动，193 测试全部通过 | ✅ |
 | 2026-08-01 | Phase 12-续：打断后上下文丢失修复——① SSE 流开始时预存用户消息到 MySQL（防止打断后历史缺失）；② `_post_chat_save` 新增 `skip_user_message` 防止重复保存；③ trip_planner 新增 `_extract_from_history()` 从历史消息 regex 提取需求字段（date/pax/budget），打断后无需重复提供；④ Chrome DevTools E2E 验证通过；⑤ 2 文件改动，193 测试全部通过 | ✅ |
+| 2026-08-01 | Phase 13：智能客服功能——① 前端左下角模式切换下拉框（🗺️ 行程定制 / 🤖 智能客服），智能客服空状态含 6 个快捷 FAQ 标签；② 后端 `force_branch` 跳过意图路由直连 customer_service；③ 在线：search_faq (Milvus→关键词→英文模糊) 自动回复；④ 离线：check_handoff→human_handoff 生成紧急交接单；⑤ 5 个文件改动，agents/tools/prompts/graph/builder 零改动，193 测试全部通过；⑥ Chrome DevTools E2E 验证通过 | ✅ |
 

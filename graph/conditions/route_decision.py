@@ -38,6 +38,14 @@ def route_decision_node(state: AgentState) -> dict:
         3. 取最高分意图 → 对应业务 Agent
         4. 所有意图分数 < 0.3 → customer_service（兜底）
     """
+    # 优先级 0：强制路由（support 模式跳过意图识别）
+    force = state.get("force_branch", "")
+    if force:
+        return {
+            "current_branch": force,
+            "branch_history": [{"from": state.get("current_branch", ""), "to": force, "force": True}],
+        }
+
     scores = state.get("intent_scores", {})
     old_branch = state.get("current_branch", "")
 
@@ -101,6 +109,9 @@ def route_condition(state: AgentState) -> str:
 
     必须在 route_decision_node 之后调用，因为 current_branch 由它写入。
     """
+    force = state.get("force_branch", "")
+    if force:
+        return force
     branch = state.get("current_branch", "")
     if branch == "human_handoff":
         return "human_handoff"

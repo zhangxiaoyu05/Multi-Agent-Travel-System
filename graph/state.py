@@ -114,6 +114,7 @@ class AgentState(MessagesState):
     # ====== 路由（owner: intent_router）======
     current_branch: str       # service / sales / operations / planner
     intent_scores: dict       # {"service": 0.1, "sales": 0.05, ...}
+    force_branch: str         # 强制路由目标（support 模式设为 "customer_service"），跳过意图识别
 
     # ====== 业务数据 ======
     need: TripNeed            # 客户出行需求（owner: trip_planner）

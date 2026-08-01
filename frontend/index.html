@@ -141,6 +141,34 @@
   }
   .btn-logout:hover { color: var(--danger); background: rgba(239,68,68,0.1); }
 
+  /* Mode Selector */
+  .mode-selector {
+    padding: 10px 16px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .mode-selector select {
+    width: 100%; padding: 8px 12px;
+    background: rgba(255,255,255,0.06); color: var(--sidebar-text);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-xs);
+    font-size: 13px; font-family: inherit; cursor: pointer;
+    outline: none; transition: all var(--transition);
+  }
+  .mode-selector select:hover { background: var(--sidebar-hover); border-color: rgba(255,255,255,0.25); }
+  .mode-selector select:focus { border-color: var(--primary); }
+
+  /* Quick FAQ Tags */
+  .quick-faqs {
+    display: flex; flex-wrap: wrap; gap: 6px; justify-content: center;
+    margin-top: 16px;
+  }
+  .quick-faq-btn {
+    padding: 4px 12px; border-radius: 16px; font-size: 12px;
+    background: var(--primary-light); color: var(--primary);
+    border: 1px solid #c7d2fe; cursor: pointer; font-family: inherit;
+    transition: all var(--transition);
+  }
+  .quick-faq-btn:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+
   /* ====== Main Area ====== */
   .main-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
@@ -394,6 +422,13 @@
 
     <div class="conversation-list" id="convList"></div>
 
+    <div class="mode-selector">
+      <select id="modeSelect" onchange="App.switchMode(this.value)">
+        <option value="planner">🗺️ 行程定制</option>
+        <option value="support">🤖 智能客服</option>
+      </select>
+    </div>
+
     <div class="sidebar-footer">
       <div class="sidebar-user" onclick="window.location.href='/static/profile.html'" style="cursor:pointer;" title="编辑用户画像">
         <span class="user-avatar" id="userAvatar">👤</span>
@@ -544,6 +579,29 @@ function showToast(msg, isError) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
 }
+
+// =============================================================================
+// App Mode
+// =============================================================================
+const App = {
+  _mode: 'planner',
+
+  switchMode(mode) {
+    this._mode = mode;
+    const statusText = document.getElementById('statusText');
+    const input = document.getElementById('messageInput');
+
+    if (mode === 'support') {
+      statusText.textContent = '🤖 智能客服';
+      input.placeholder = '输入你遇到的问题，我会从知识库中为你查找答案...';
+      Chat._showSupportEmpty();
+    } else {
+      statusText.textContent = 'API 在线';
+      input.placeholder = '输入你的旅行需求...';
+      Chat._showEmpty();
+    }
+  },
+};
 
 // =============================================================================
 // Auth Module
@@ -858,6 +916,7 @@ const Chat = {
           message: message,
           channel: 'web',
           language: 'zh',
+          mode: App._mode,
         }),
         signal: this._abortController.signal,
       });
@@ -1104,7 +1163,31 @@ const Chat = {
         <div style="font-size:13px;">点击左侧「新对话」或输入你的问题</div>
       </div>`;
     }
-  }
+  },
+
+  _showSupportEmpty() {
+    const container = document.getElementById('chatMessages');
+    if (container.querySelector('.chat-empty') || container.children.length === 0) {
+      container.innerHTML = `<div class="chat-empty">
+        <div class="chat-empty-icon">🤖</div>
+        <div style="font-size:15px;font-weight:500;">智能客服</div>
+        <div style="font-size:13px;margin-bottom:4px;">我是您的旅行助手，可以回答签证、支付、退改、交通等问题</div>
+        <div class="quick-faqs">
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('签证需要什么材料？')">🛂 签证材料</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('支持哪些支付方式？')">💳 支付方式</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('退改政策是什么？')">🔄 退改政策</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('当地天气怎么样？')">🌤️ 天气查询</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('怎么坐高铁和地铁？')">🚄 交通出行</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('旅行安全注意事项有哪些？')">🛡️ 安全须知</button>
+        </div>
+      </div>`;
+    }
+  },
+
+  sendQuick(msg) {
+    document.getElementById('messageInput').value = msg;
+    this.send();
+  },
 };
 
 // =============================================================================

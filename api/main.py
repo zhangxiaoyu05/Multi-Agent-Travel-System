@@ -656,6 +656,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
+            "force_branch": "customer_service" if req.mode == "support" else "",
         }
 
         result = await _graph.ainvoke(
@@ -779,6 +780,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
+            "force_branch": "customer_service" if req.mode == "support" else "",
         }
 
         final_state = None
