@@ -180,10 +180,14 @@ class TripPlannerAgent(BaseAgent):
         if revision_count > 0:
             merged_need = existing_need
         else:
+            # 🛑 从历史用户消息中也提取字段（防止打断后丢失已提供的信息）
+            history_need = self._extract_from_history(state)
             extracted = self._extract_fields(user_msg, existing_need)
+            # 合并：历史提取 < 当前提取（当前消息优先级更高）
+            merged_need = {**history_need, **existing_need, **extracted}
             # 🧠 从画像/偏好自动补全缺失字段（不覆盖用户明确提供的信息）
             merged_need = self._enrich_from_memory(
-                {**existing_need, **extracted}, profile, prefs
+                merged_need, profile, prefs
             )
 
         # Step 2: 检查必填项
@@ -274,6 +278,32 @@ class TripPlannerAgent(BaseAgent):
     # =========================================================================
     # 私有方法
     # =========================================================================
+
+    @staticmethod
+    def _extract_from_history(state: AgentState) -> dict:
+        """从最近的历史用户消息中提取需求字段（防止打断后丢失上下文）
+
+        遍历 state["messages"] 中最近 8 条 HumanMessage，
+        用 regex 提取字段，返回合并后的 need dict。
+        （后续与当前消息的正则提取结果合并，当前消息优先级更高）
+        """
+        from langchain_core.messages import HumanMessage
+        result: dict = {}
+        messages = state.get("messages", []) or []
+        # 从后往前取 HumanMessage（最近的优先），但只处理倒数第2条起
+        # （最后一条就是当前消息，跳过）
+        user_msgs = [m for m in messages if isinstance(m, HumanMessage)]
+        # 排除最后一条（当前消息），从近到远处理
+        for m in reversed(user_msgs[:-1]):
+            fields = _extract_fields_regex(m.content)
+            # 只填充 result 中尚未有的字段（越近的消息优先级越高）
+            for k, v in fields.items():
+                if v and k not in result:
+                    result[k] = v
+            # 限制处理最近 5 条用户消息
+            if len([k for k, v in result.items() if v]) >= 5:
+                break
+        return result
 
     def _extract_fields(self, user_msg: str, existing_need: dict) -> dict:
         """Regex + LLM 双通道提取需求字段"""

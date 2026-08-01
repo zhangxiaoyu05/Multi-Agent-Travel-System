@@ -420,6 +420,42 @@ fetch AbortController.abort() → SSE 流断开
 
 ---
 
+### Phase 12-续 ✅ 打断后上下文丢失修复（2026-08-01）
+
+Chrome DevTools E2E 测试发现打断功能存在上下文丢失：
+
+- 用户发送完整信息（date + pax + budget）→ 打断 → 下一轮 AI 又从头问，不知道已有信息
+- **根因 1**：SSE 流被打断后用户消息未保存到 MySQL，下一轮 `_load_chat_history` 读不到
+- **根因 2**：`trip_planner._extract_fields()` 只从当前消息 regex 提取，不回溯历史消息
+
+#### 核心改动
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `api/main.py` | +15 行 | 流开始时预存用户消息到 MySQL（`_event_stream` 开头 `await mm.save_message`）；`_post_chat_save` 新增 `skip_user_message` 参数防止重复保存 |
+| `agents/trip_planner.py` | +28 行 | 新增 `_extract_from_history()`——从最近 5 条历史 HumanMessage 中 regex 提取，合并到 `merged_need`（当前消息优先级更高） |
+
+#### 修复后数据流（打断场景）
+
+```
+用户: "10月5日，2人，1500美元每人" → 预存到 MySQL ✅
+  → AI 开始处理... → 用户打断 🛑
+
+用户: "帮我把重点放在中山陵和总统府"
+  → _load_chat_history() 读到上一条消息 ✅
+  → _extract_from_history() 提取: arrival_date=10月5日, pax=2, budget=$1500 ✅
+  → _extract_fields() 从当前消息提取: special_requests=中山陵/总统府
+  → merged_need 完整 → 生成行程 ✅
+```
+
+#### E2E 验证
+
+- ✅ 打断后用户消息持久化到 MySQL（Chrome DevTools 确认）
+- ✅ 下一轮无需重复提供 date/pax/budget，AI 自动从历史提取
+- ✅ 行程生成正确引用所有字段（日期、人数、预算、景点重点）
+
+---
+
 ### 下一步：持续优化
 
 **完成时间**：2026-07-30
@@ -702,4 +738,5 @@ event: error           → {"message":"..."}
 | 2026-08-01 | Phase 11-续：AI 记忆注入——① AgentState 新增 user_profile/user_preferences 字段；② session_context 改为异步节点，从 MemoryManager 加载记忆；③ trip_planner：画像自动补全 theme/pace/special_requests → 减少追问 + 「💡 根据您的历史偏好...」提示 + Prompt 新增「客户画像」区块；④ customer_service/sales_agent：extra_context 注入国籍/兴趣/预算；⑤ `/chat` `/chat/stream` 端点从 MySQL 加载历史消息回退（checkpoint 空时）；⑥ Chrome DevTools E2E 验证：AI 生成行程引用画像数据（素食·温泉·古寺主题）；⑦ 7 个文件改动，77 个测试通过 | ✅ |
 | 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
 | 2026-08-01 | Phase 12：用户可打断功能——① 前端新增停止按钮（红色脉冲动画），AbortController 中断 SSE 流，中断气泡保留进度阶段 + ⚠ 已中断 badge；② 后端 `_event_stream()` 捕获 GeneratorExit/CancelledError 优雅处理客户端断开；③ 用户可随时中断 AI 生成、补充纠正后继续对话，上下文不丢失；④ 2 个文件改动，193 测试全部通过 | ✅ |
+| 2026-08-01 | Phase 12-续：打断后上下文丢失修复——① SSE 流开始时预存用户消息到 MySQL（防止打断后历史缺失）；② `_post_chat_save` 新增 `skip_user_message` 防止重复保存；③ trip_planner 新增 `_extract_from_history()` 从历史消息 regex 提取需求字段（date/pax/budget），打断后无需重复提供；④ Chrome DevTools E2E 验证通过；⑤ 2 文件改动，193 测试全部通过 | ✅ |
 

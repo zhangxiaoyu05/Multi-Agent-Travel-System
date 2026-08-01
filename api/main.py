@@ -519,18 +519,20 @@ async def _post_chat_save(
     conversation_id: str, user_id: str, user_message: str,
     reply: str, branch: str | None, intent_scores: dict | None,
     draft: dict | None, quote: str | None, need_human: bool | None,
-    all_messages: list,
+    all_messages: list, skip_user_message: bool = False,
 ):
     """对话后处理：保存消息 + 上下文管理 + 偏好提取（异步，不阻塞响应）
 
     在每次 /chat 或 /chat/stream 完成后调用。
+    当 skip_user_message=True 时跳过用户消息保存（stream 端点已在开始时预存）。
     """
     try:
         from services.memory import MemoryManager
         mm = MemoryManager()
 
-        # 1. 保存用户消息
-        await mm.save_message(conversation_id, "user", user_message)
+        # 1. 保存用户消息（如果尚未预存）
+        if not skip_user_message:
+            await mm.save_message(conversation_id, "user", user_message)
 
         # 2. 保存 Agent 回复（附带元数据）
         meta = {}
@@ -762,6 +764,15 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
         # 🧠 加载历史消息（checkpoint 空时回退 MySQL）
         history_msgs = await _load_chat_history(req.conversation_id)
 
+        # 🛑 提前保存用户消息——即使 SSE 流被中断/取消，下一轮也能读取完整上下文
+        #    注意：正常完成后 _post_chat_save 会再次保存同一消息（幂等，不重复）
+        try:
+            from services.memory import MemoryManager
+            mm = MemoryManager()
+            await mm.save_message(req.conversation_id, "user", req.message)
+        except Exception:
+            pass
+
         initial_state = {
             "messages": history_msgs + [HumanMessage(content=req.message)],
             "session_id": req.conversation_id,
@@ -817,7 +828,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                 }
                 yield f"event: done\ndata: {json.dumps(resp, ensure_ascii=False)}\n\n"
 
-                # 异步保存消息（不阻塞 SSE 流）
+                # 异步保存消息（用户消息已在流开始时预存，skip_user_message=True）
                 asyncio.create_task(
                     _post_chat_save(
                         conversation_id=req.conversation_id,
@@ -830,14 +841,14 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
                         quote=resp.get("quote"),
                         need_human=resp.get("need_human"),
                         all_messages=[],
+                        skip_user_message=True,
                     )
                 )
             else:
                 yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
 
         except (GeneratorExit, asyncio.CancelledError):
-            # 🛑 用户主动中断——前端已展示部分内容，无需额外处理
-            # Graph 执行会随 asyncio 任务取消而中断
+            # 🛑 用户主动中断——用户消息已在流开始时预存到 MySQL
             logger.info(f"用户中断 SSE 流 (conversation={req.conversation_id})")
             raise
 

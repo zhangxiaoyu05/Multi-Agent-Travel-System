@@ -357,6 +357,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 11 | 短/中/长期记忆系统（存储 + 前端展示） | ✅ |
 | Phase 11-续 | AI 记忆注入——Agent 读取画像/偏好/历史消息，Prompt 注入 + 自动补全需求 | ✅ |
 | Phase 12 | 用户可打断功能——SSE 流式中断（AbortController + 后端优雅处理），支持补充纠正后继续 | ✅ |
+| Phase 12-续 | 打断后上下文丢失修复——预存用户消息 + 历史消息 regex 回溯提取需求字段 | ✅ |
 
 ## 许可证
 
