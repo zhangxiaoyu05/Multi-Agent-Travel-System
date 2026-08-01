@@ -272,7 +272,7 @@ class TripPlannerAgent(BaseAgent):
                 "weather_summary": str(weather_info),
             },
             "final_reply": response.content,
-            "current_branch": "planner",
+            "current_branch": "trip_planner",
         }
 
     # =========================================================================
@@ -506,7 +506,7 @@ class TripPlannerAgent(BaseAgent):
         return {
             "need": need,
             "final_reply": "\n".join(lines),
-            "current_branch": "planner",
+            "current_branch": "trip_planner",
         }
 
 

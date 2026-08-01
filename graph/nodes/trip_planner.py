@@ -19,7 +19,7 @@ async def trip_planner(state: AgentState) -> dict:
         "need": result.get("need", {}),
         "draft": draft,
         "final_reply": result.get("final_reply", ""),
-        "current_branch": result.get("current_branch", "planner"),
+        "current_branch": result.get("current_branch", "trip_planner"),
         "agent_traces": [{
             "agent": "trip_planner",
             "action": "generated_draft" if has_draft else "asked_missing_fields",

@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01（Phase 13-续 语言选择器恢复）
+> 最后更新：2026-08-01（Phase 13-续-2 模式视觉区分增强）
 
 ---
 
@@ -569,6 +569,51 @@ Chrome DevTools E2E 测试发现打断功能存在上下文丢失：
 ```
 
 所有 4 个 Agent（customer_service / trip_planner / sales / operations）均经过 `BaseAgent._run_tool_calling_loop()` → 第 88 行统一注入语言指令，无需逐个修改。
+
+---
+
+### Phase 13-续-2 ✅ 模式视觉区分增强——Bug 修复 + 前端标签/色条/分隔线（2026-08-01）
+
+#### 问题
+
+用户反馈行程定制和智能客服共享对话窗口，消息难以区分归属。排查发现两个层面的问题：
+
+1. **后端 Bug**：4 个 Agent 节点输出的 `current_branch` 使用意图 key（`"service"`）而非节点名（`"customer_service"`），导致前端标签映射失效——既不显示颜色也不显示中文标签
+2. **前端欠区分**：仅有底部小字 meta badge，没有模式级别的视觉标记
+
+#### 修复
+
+**后端**（1 个 Bug，6 处修复）：
+
+| 文件 | 改动 |
+|------|------|
+| `graph/nodes/customer_service.py` | `current_branch`: `"service"` → `"customer_service"` |
+| `graph/nodes/trip_planner.py` | `current_branch`: 默认 `"planner"` → `"trip_planner"` |
+| `graph/nodes/sales_agent.py` | `current_branch`: `"sales"` → `"sales_agent"` |
+| `graph/nodes/operations_agent.py` | `current_branch`: `"operations"` → `"operations_agent"` |
+| `agents/trip_planner.py` | 两处 `current_branch`: `"planner"` → `"trip_planner"` |
+
+**前端**（三层视觉增强）：
+
+| 层级 | 机制 | 效果 |
+|------|------|------|
+| 用户消息上方 | `.mode-badge` 标签 | `🗺️ 行程定制`（紫）/ `🤖 智能客服`（蓝）——标识消息发送时的模式 |
+| Agent 气泡内顶部 | `.branch-tag` 标签（12px 加粗） | 替换原底部 11px 小 badge，标签文案与模式名对齐 |
+| Agent 左侧 | `data-branch` + 3px 色条 | 紫=行程定制 / 蓝=智能客服 / 红=转人工 / 橙=销售 / 绿=运营 |
+| 模式切换 | `.mode-divider` 分隔线 | `──── 🗺️ 行程定制 ────` 自动插入 |
+
+标签文案统一更新：
+- `customer_service`: `🤖 客服` → `🤖 智能客服`
+- `trip_planner`: `🗺️ 定制` → `🗺️ 行程定制`
+- `human_handoff`: `🙋 人工接管` → `🙋 转人工`
+
+#### 验证
+
+Chrome DevTools 实测确认：
+- ✅ 用户消息模式标签正确显示（🗺️ 行程定制 / 🤖 智能客服）
+- ✅ Agent 左侧色条生效（蓝 `#1890ff` / 紫 `#722ed1`）
+- ✅ 气泡内分支标签正确翻译（不再显示原始 key `"service"`）
+- ✅ 模式切换时自动插入分隔线
 
 ---
 

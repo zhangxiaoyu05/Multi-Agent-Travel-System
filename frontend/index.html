@@ -227,6 +227,15 @@
   .msg.user .msg-bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
   .msg.agent .msg-bubble { background: var(--surface); color: var(--text); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
 
+  /* Mode badge on user messages */
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    margin-bottom: 4px; opacity: 0.85;
+  }
+  .mode-planner { background: rgba(114,46,209,0.15); color: #722ed1; }
+  .mode-support { background: rgba(24,144,255,0.15); color: #1890ff; }
+
   .msg-meta { display: flex; gap: 8px; align-items: center; margin-top: 5px; font-size: 11px; flex-wrap: wrap; }
 
   /* Markdown elements inside agent bubble */
@@ -245,16 +254,35 @@
   .msg.agent .msg-bubble pre code { background: none; padding: 0; }
   .msg.agent .msg-bubble strong { color: #1a1a2e; }
 
-  /* Branch Badge */
-  .branch-badge {
+  /* Message left accent by branch */
+  .msg.agent { border-left: 3px solid transparent; padding-left: 7px; }
+  .msg.agent[data-branch="trip_planner"],
+  .msg.agent[data-branch="planner"] { border-left-color: #722ed1; }  /* 紫色·行程定制 */
+  .msg.agent[data-branch="customer_service"] { border-left-color: #1890ff; }  /* 蓝色·智能客服 */
+  .msg.agent[data-branch="human_handoff"] { border-left-color: #f5222d; }  /* 红色·转人工 */
+  .msg.agent[data-branch="sales_agent"] { border-left-color: #fa8c16; }  /* 橙色·销售 */
+  .msg.agent[data-branch="operations_agent"] { border-left-color: #52c41a; }  /* 绿色·运营 */
+
+  /* Branch Tag (inside bubble header) */
+  .branch-tag {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500;
+    padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;
+    margin-bottom: 8px;
   }
   .b-customer_service { background: #e6f7ff; color: #1890ff; }
   .b-sales_agent { background: #fff7e6; color: #fa8c16; }
   .b-operations_agent { background: #f6ffed; color: #52c41a; }
   .b-trip_planner, .b-planner { background: #f9f0ff; color: #722ed1; }
   .b-human_handoff { background: #fff1f0; color: #f5222d; }
+
+  /* Mode switch divider */
+  .mode-divider {
+    display: flex; align-items: center; gap: 10px; margin: 4px 0;
+    color: var(--text-muted); font-size: 12px;
+  }
+  .mode-divider::before, .mode-divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
 
   .human-alert {
     display: inline-flex; align-items: center; gap: 4px;
@@ -815,6 +843,7 @@ const Chat = {
   _abortController: null,
   _streamingBubbleId: null,
   _streamingText: '',
+  _lastMode: undefined,  // track mode for divider
 
   async newConversation() {
     try {
@@ -899,7 +928,7 @@ const Chat = {
     input.value = '';
     input.style.height = 'auto';
 
-    this._render({role: 'user', content: message});
+    this._render({role: 'user', content: message, mode: App._mode});
 
     const bubbleId = 'msg-' + Date.now();
     this._streamingBubbleId = bubbleId;
@@ -1048,9 +1077,9 @@ const Chat = {
 
   _getBranchLabel(branch) {
     const m = {
-      'customer_service':'🤖 客服','sales_agent':'💰 销售',
-      'operations_agent':'📋 运营','trip_planner':'🗺️ 定制',
-      'planner':'🗺️ 定制','human_handoff':'🙋 人工接管',
+      'customer_service':'🤖 智能客服','sales_agent':'💰 销售咨询',
+      'operations_agent':'📋 运营处理','trip_planner':'🗺️ 行程定制',
+      'planner':'🗺️ 行程定制','human_handoff':'🙋 转人工',
     };
     return m[branch] || branch || '';
   },
@@ -1085,18 +1114,44 @@ const Chat = {
     const div = document.createElement('div');
     div.className = `msg ${isUser ? 'user' : 'agent'}`;
 
-    if (isUser) {
-      div.innerHTML = `<div class="msg-avatar">👤</div><div class="msg-content"><div class="msg-bubble">${escapeHtml(data.content)}</div></div>`;
-    } else {
-      let metaHtml = '';
-      if (data.branch) {
-        metaHtml += `<span class="branch-badge ${this._getBranchClass(data.branch)}">${this._getBranchLabel(data.branch)}</span>`;
+    // Track mode switching for divider
+    const msgMode = data.mode || '';
+    if (!isUser && data.branch) {
+      div.setAttribute('data-branch', data.branch);
+      // Show mode divider if mode changed from last agent message
+      if (msgMode && msgMode !== Chat._lastMode && Chat._lastMode !== undefined) {
+        const divider = document.createElement('div');
+        divider.className = 'mode-divider';
+        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服' };
+        divider.textContent = labels[msgMode] || msgMode;
+        container.appendChild(divider);
       }
+      if (msgMode) Chat._lastMode = msgMode;
+    }
+
+    if (isUser) {
+      // Mode badge above user bubble
+      let modeBadgeHtml = '';
+      if (data.mode) {
+        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服' };
+        const label = labels[data.mode] || data.mode;
+        const cls = data.mode === 'support' ? 'mode-support' : 'mode-planner';
+        modeBadgeHtml = `<div class="mode-badge ${cls}">${label}</div>`;
+      }
+      div.innerHTML = `<div class="msg-avatar">👤</div><div class="msg-content">${modeBadgeHtml}<div class="msg-bubble">${escapeHtml(data.content)}</div></div>`;
+    } else {
+      // Branch tag inside bubble header
+      let tagHtml = '';
+      if (data.branch) {
+        tagHtml = `<div class="branch-tag ${this._getBranchClass(data.branch)}">${this._getBranchLabel(data.branch)}</div>`;
+      }
+
+      let metaHtml = '';
       if (data.needHuman) {
         metaHtml += '<span class="human-alert">⚠️ 已转人工</span>';
       }
 
-      let bubbleHtml = simpleMarkdown(data.content);
+      let bubbleHtml = tagHtml + simpleMarkdown(data.content);
 
       if (data.intentScores) bubbleHtml += this._renderIntentScores(data.intentScores);
 
@@ -1157,6 +1212,7 @@ const Chat = {
       role: 'agent',
       content: data.reply || '(无回复)',
       branch: data.current_branch,
+      mode: App._mode,
       needHuman: data.need_human,
       intentScores: data.intent_scores,
       draft: data.draft,
@@ -1166,6 +1222,7 @@ const Chat = {
 
   _clear() {
     document.getElementById('chatMessages').innerHTML = '';
+    this._lastMode = undefined;
   },
 
   _showEmpty() {

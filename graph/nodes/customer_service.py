@@ -22,7 +22,7 @@ async def customer_service(state: AgentState) -> dict:
         "final_reply": result.get("final_reply", ""),
         "need_human": need_human,
         "handoff": handoff,
-        "current_branch": "service",
+        "current_branch": "customer_service",
         "agent_traces": [{
             "agent": "customer_service",
             "action": "answered_faq" if not need_human else "requested_handoff",

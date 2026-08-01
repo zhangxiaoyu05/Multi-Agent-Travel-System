@@ -36,7 +36,7 @@ async def sales_agent(state: AgentState) -> dict:
         "handoff": handoff,
         "intent_level": intent_level,
         "next_action": next_action,
-        "current_branch": "sales",
+        "current_branch": "sales_agent",
         "agent_traces": [{
             "agent": "sales_agent",
             "action": "provided_quote" if quote else "engaged_customer",

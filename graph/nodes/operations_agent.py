@@ -27,7 +27,7 @@ async def operations_agent(state: AgentState) -> dict:
         "final_reply": final_reply,
         "need_human": need_human,
         "handoff": handoff,
-        "current_branch": "operations",
+        "current_branch": "operations_agent",
         "agent_traces": [{
             "agent": "operations_agent",
             "action": "handled_ops" if not need_human else "escalated",
