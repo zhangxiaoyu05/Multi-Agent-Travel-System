@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-07-31
+> 最后更新：2026-08-01
 
 ---
 
@@ -313,6 +313,71 @@ frontend/index.html                 ← 侧边栏→画像页入口 + 消息加�
 
 - `python -m pytest tests/ -v` → **193 个测试全部通过**（177 原有 + 16 新增，6.9s）
 - 根节点零改动（graph/ + agents/ + tools/ + prompts/ 原有文件不变）
+- ⚠️ **发现：AI Agent 未读取记忆**——消息和画像数据仅用于前端展示，Agent prompt 未注入（详见 Phase 11-续）
+
+---
+
+### Phase 11-续 ✅ AI 记忆注入——Agent 读取短/中/长期记忆（2026-08-01）
+
+Phase 11 实现了记忆的存储和前端展示，但 **AI Agent 在对话时完全没有读取这些数据**：
+- `chat_messages` 表的消息未被加载到 graph state（仅依赖 checkpoint）
+- `user_profiles` 表的画像未被注入 Agent prompt
+- `user_preferences` 表的偏好未被任何 Agent 使用
+
+本次修复将三层记忆完整接入 AI 对话流程。
+
+#### 核心改动
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `graph/state.py` | +2 字段 | 新增 `user_profile: dict` + `user_preferences: dict` |
+| `graph/nodes/session_context.py` | 重写 | 异步节点，从 `MemoryManager` 加载画像和偏好到 State |
+| `agents/trip_planner.py` | +~80 行 | `_enrich_from_memory()` 自动补全缺失字段，`_build_profile_context()` 构建 Prompt 上下文，追问跳过已知偏好 |
+| `agents/customer_service.py` | +~40 行 | `_build_context()` 从 State 提取画像注入 `extra_context` |
+| `agents/sales_agent.py` | +~30 行 | 同上，注入国籍/预算/目的地到 tool-calling 循环 |
+| `api/main.py` | +~35 行 | `_load_chat_history()` 从 MySQL 加载历史消息；`/chat` `/chat/stream` 调用前合并历史 |
+| `tests/test_trip_planner.py` | 2 行 | `session_context` 测试从同步改为 async |
+
+#### 数据流（修复后）
+
+```
+用户消息 → _load_chat_history(conv_id)  ← 🧠 MySQL chat_messages
+              │
+              ▼
+          State{messages: [历史+当前], user_profile: {...}, user_preferences: {...}}
+              │                                    │
+              │                          session_context 异步加载
+              │                          ← 🧠 MySQL user_profiles / user_preferences
+              ▼
+          AI Agent
+              │
+              ├─ trip_planner:  画像→自动补全 theme/pace/special_requests
+              │                  Prompt 新增「客户画像」区块
+              │                  追问跳过已知偏好 + 「💡 根据您的历史偏好...」提示
+              ├─ customer_service: extra_context→国籍/兴趣/语言
+              └─ sales_agent:     extra_context→预算/目的地/国籍
+```
+
+#### Chrome DevTools E2E 验证
+
+测试用户画像：Japan / Tokyo,Kyoto / Food,Onsen,Temples / relaxed / family / Vegetarian
+
+- ✅ 用户说 "Plan a trip for me" → AI 不再追问 theme/pace/special_requests（画像已覆盖）
+- ✅ 回复显示 "💡 根据您的历史偏好，已了解：偏好节奏：relaxed | 兴趣：Food, Onsen, Temples | 同行人：family"
+- ✅ 用户补充基本信息（天数/日期/人数/预算）后生成完整行程
+- ✅ 行程标题 "京都 3 日深度游行程（素食·温泉·古寺主题）"，餐饮推荐包含 "怀石素食、汤豆腐、精进料理"
+
+#### 同时修复的 Bug（测试过程中发现）
+
+| Bug | 修复 | 文件 |
+|-----|------|------|
+| Docker 内网 MySQL 端口 3307→3306 | `docker-compose.yml` 加 `MYSQL_PORT=3306` | docker-compose.yml |
+| `/profile` 页面路由遮蔽 API 路由 | 删除冗余 HTML 路由（StaticFiles 已提供） | api/main.py |
+| `budget_range` dict 未序列化传 SQL | 加入 JSON 序列化字段列表 | services/memory.py |
+
+#### 测试结果
+
+- `pytest tests/test_memory.py tests/test_graph.py tests/test_trip_planner.py tests/test_state.py -v` → **77 个测试全部通过**
 
 ---
 
@@ -594,5 +659,7 @@ event: error           → {"message":"..."}
 | 2026-07-31 | 共享黑板 v2 重构：① AgentState 新增 HandoffContext + AgentTrace 类型 + 3 个字段（handoff / agent_traces / branch_history），用结构化上下文替代裸 need_human 判断；② 字段所有权契约——每个字段明确 owner 节点，追加型字段使用 _append_list reducer；③ route_decision 拆为节点+条件（解决条件边不能写 State 的 LangGraph 限制），分支切换时自动重置 intent_level/next_action 防止跨分支污染；④ 7 个节点写入 agent_traces 审计日志，4 个节点写入 handoff 上下文（含 from_agent + reason + priority + summary），human_handoff 交接单包含优先级标签+报价单+Agent 执行链；⑤ 12 个文件改动，177 测试全部通过 | ✅ |
 | 2026-07-31 | 意图路由修复 + AI 格式美化：① 新增预过滤器 _prefilter_user_message()——12 种能力询问 + 6 种寒暄正则匹配后跳过 LLM，直接返回 service=0.95 / need_human=false，解决"你能干什么"等被误判转人工；② Prompt 增强：intent_router.txt 新增能力询问/寒暄/道谢规则，收紧 need_human 触发条件，防止历史上下文污染；customer_service.txt 新增平台 5 大能力介绍，客服可直接介绍系统功能；③ 投诉优先级判断从 LLM service>0.7 改为 _has_complaint_intent() 关键词匹配，区分"我要投诉"（urgent）vs"投诉流程"（FAQ）；④ human_handoff.py 用 Markdown 标题+`---` 分隔线替代 ASCII `====`/`----` 符号，意图分数格式化为 'service=90%' 可读格式；⑤ 前端 simpleMarkdown 增强——代码块/分隔线/列表包裹/粗体/标题 h1-h3；CSS 新增 agent 气泡内 Markdown 样式（h1/h2/h3/hr/ul/li/code/pre/strong/p） | ✅ |
 | 2026-08-01 | Phase 11：短/中/长期记忆系统——① 对话消息 Redis+MySQL 双写，切换窗口不丢失；② 上下文窗口管理（qwen3-max 32K tokens，超 70% 触发 LLM 摘要）；③ 中期偏好提取（LLM structured output，每 5 轮触发，60 天 TTL）；④ 长期用户画像（永久保存 + /profile 页面 + LLM 建议→用户确认）；⑤ 新增 5 个文件/修改 7 个文件，graph/agents/tools 零改动；⑥ 193 测试全部通过 | ✅ |
+| 2026-08-01 | Chrome DevTools E2E 测试 + Bug 修复：① Docker 内网 MYSQL_PORT=3307 导致 MySQL 连接失败 → docker-compose.yml 覆盖为 3306；② `/profile` 页面路由遮蔽 API 端点（`GET /profile` 同时有 HTML 页面和 API 两个 handler）→ 删除冗余 HTML 路由（StaticFiles 已提供）；③ `budget_range`（Pydantic BudgetRange 对象）model_dump 后为 dict 未序列化直接传 SQL → memory.py 加入 JSON 序列化字段；④ 全链路验证：注册/登录/消息发送/对话切换/画像编辑 均通过 | ✅ |
+| 2026-08-01 | Phase 11-续：AI 记忆注入——① AgentState 新增 user_profile/user_preferences 字段；② session_context 改为异步节点，从 MemoryManager 加载记忆；③ trip_planner：画像自动补全 theme/pace/special_requests → 减少追问 + 「💡 根据您的历史偏好...」提示 + Prompt 新增「客户画像」区块；④ customer_service/sales_agent：extra_context 注入国籍/兴趣/预算；⑤ `/chat` `/chat/stream` 端点从 MySQL 加载历史消息回退（checkpoint 空时）；⑥ Chrome DevTools E2E 验证：AI 生成行程引用画像数据（素食·温泉·古寺主题）；⑦ 7 个文件改动，77 个测试通过 | ✅ |
 | 2026-07-31 | CSS flexbox 修复 + Markdown 块解析重写：① 用户消息框跑左边 Bug——width:100%+row-reverse+justify-content:flex-end 在反转轴上指向左侧，回退 max-width:80%+align-self:flex-end 方案；② --- 和 ### 显示为原始文本——后端所有 --- 与 ### 之间补空行（标准 Markdown 块分隔），前端重写为按 \n\n+ 分块解析（h1/h2/h3/hr/ul/pre/p 独立判断），块首遇 --- 自动拆分；③ Markdown 间距收紧：p { margin:0 }、p+p { margin-top:6px }，h1/h2/h3/hr/ul 间距收紧，首尾元素 margin 归零 | ✅ |
 

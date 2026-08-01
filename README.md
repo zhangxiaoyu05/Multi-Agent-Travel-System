@@ -27,7 +27,7 @@
 > 
 > 🛡️ **意图预过滤**：能力询问/寒暄/道谢类消息跳过 LLM，正则匹配后直接免转人工路由到客服——消除 LLM hallucinate `need_human=true` 导致的误判。
 >
-> 🧠 **三层记忆系统**：短期（Redis+MySQL 对话缓存，切换窗口不丢失，上下文窗口自动摘要）、中期（LLM 提取旅行偏好，60 天 TTL）、长期（用户画像永久保存，/profile 页面可编辑，LLM 建议→用户确认）。
+> 🧠 **三层记忆系统（AI 可读）**：短期（Redis+MySQL 对话缓存 → Agent 上下文）、中期（LLM 提取旅行偏好 → 自动补全需求）、长期（用户画像 → Agent Prompt 注入）。切换窗口不丢失，AI 主动引用用户偏好减少追问。
 >
 > 🎨 **Markdown 渲染**：AI 回复使用原生 Markdown 格式（标题/分隔线/列表/代码块/粗体），前端块级解析引擎渲染，告别 ASCII `====`/`----` 符号。
 
@@ -106,7 +106,7 @@ Multi_Agent/
 │   └── capi_real.py       # 真实 CAPI API 骨架
 ├── services/              # 基础设施
 │   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max）
-│   ├── memory.py          # 🆕 短/中/长期记忆管理器（消息双写 + Token估算 + 偏好提取 + 画像CRUD）
+│   ├── memory.py          # 🆕 短/中/长期记忆管理器（消息双写 + Token估算 + 偏好提取 + 画像CRUD）—— Agent 可读
 │   ├── embeddings.py      # Embedding（text-embedding-v4，DashScope 原生 API）
 │   ├── vector_store.py    # 向量存储（Milvus + HNSW 索引）
 │   ├── mysql.py           # MySQL 连接池（SQLAlchemy async）
@@ -269,6 +269,14 @@ event: done            → {完整 ChatResponse}
 | `/` | 聊天主界面 |
 | `/profile` | 用户画像编辑页 |
 
+### 🧠 AI 记忆注入
+
+> Phase 11-续：AI Agent 在对话时主动读取用户画像和偏好，无需用户重复描述。
+>
+> - **trip_planner**：画像自动补全行程需求（主题/节奏/特殊需求）→ 减少追问，Prompt 包含「客户画像」+「💡 根据您的历史偏好...」
+> - **customer_service** / **sales_agent**：`extra_context` 注入国籍/兴趣/预算/目的地
+> - **历史消息**：`/chat` 端点从 MySQL 加载历史 → checkpoint 空时回退
+
 ## 测试
 
 ```bash
@@ -344,7 +352,8 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 8 | 基础设施升级（MySQL + Redis + Docker 全容器化） | ✅ |
 | Phase 9 | SSE 流式输出（进度推送 + 降级兼容） | ✅ |
 | Phase 10 | 意图路由预过滤 + Markdown 渲染引擎 + AI 回复格式美化 + 消息框对齐 | ✅ |
-| Phase 11 | 短/中/长期记忆系统（Redis 缓存 + MySQL 持久化 + 上下文窗口管理 + LLM 偏好提取 + 用户画像） | ✅ |
+| Phase 11 | 短/中/长期记忆系统（存储 + 前端展示） | ✅ |
+| Phase 11-续 | AI 记忆注入——Agent 读取画像/偏好/历史消息，Prompt 注入 + 自动补全需求 | ✅ |
 
 ## 许可证
 
