@@ -236,6 +236,8 @@
   }
   .mode-planner { background: rgba(14,165,233,0.12); color: #0284c7; }
   .mode-support { background: rgba(37,99,235,0.12); color: #2563eb; }
+  .mode-sales { background: rgba(250,140,22,0.12); color: #d46b08; }
+  .mode-operations { background: rgba(82,196,26,0.12); color: #389e0d; }
 
   .msg-meta { display: flex; gap: 8px; align-items: center; margin-top: 5px; font-size: 11px; flex-wrap: wrap; }
 
@@ -482,6 +484,8 @@
       <select id="modeSelect" onchange="App.switchMode(this.value)">
         <option value="planner">🗺️ 行程定制</option>
         <option value="support">🤖 智能客服</option>
+        <option value="sales">💰 销售咨询</option>
+        <option value="operations">📋 运营处理</option>
       </select>
       <select id="langSelect" onchange="App.switchLang(this.value)">
         <option value="zh">🇨🇳 中文</option>
@@ -555,74 +559,112 @@ function escapeHtml(str) {
 function simpleMarkdown(text) {
   if (!text) return '';
 
-  // 按双换行拆成逻辑块，每个块独立处理，避免块元素被 <p> 包裹
+  // 行内格式（**粗体** / *斜体* / `代码`）——所有类型共用
+  function inlineFmt(s) {
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    return s;
+  }
+
+  // 分离转义 HTML 和行内格式
+  function fmtLine(s) { return inlineFmt(escapeHtml(s)); }
+
+  // 先按双换行拆块
   var blocks = text.split(/\n\n+/);
-  var htmlParts = [];
+  var result = '';
 
   for (var i = 0; i < blocks.length; i++) {
     var block = blocks[i].trim();
     if (!block) continue;
 
-    // 有些块第一行是 --- 后面紧跟内容（后端偶发换行不足），拆开处理
+    // --- 分隔线开头的处理
     if (/^[-]{3,}\n/.test(block)) {
       var idx = block.indexOf('\n');
-      htmlParts.push('<hr>');
+      result += '<hr>\n';
       block = block.substring(idx + 1).trim();
       if (!block) continue;
     }
 
-    // 先转义
+    // 转义整个块
     var safe = escapeHtml(block);
-
-    // ---- 分隔线（单独一行 --- / *** / ___ ） ----
-    if (/^[-]{3,}$/.test(safe)) { htmlParts.push('<hr>'); continue; }
-    if (/^[\*]{3,}$/.test(safe)) { htmlParts.push('<hr>'); continue; }
-    if (/^[_]{3,}$/.test(safe)) { htmlParts.push('<hr>'); continue; }
-
-    // ---- 标题 ----
-    if (/^### .+/.test(safe)) {
-      htmlParts.push(safe.replace(/^### (.+)$/gm, '<h3>$1</h3>'));
-      continue;
-    }
-    if (/^## .+/.test(safe)) {
-      htmlParts.push(safe.replace(/^## (.+)$/gm, '<h2>$1</h2>'));
-      continue;
-    }
-    if (/^# .+/.test(safe)) {
-      htmlParts.push(safe.replace(/^# (.+)$/gm, '<h1>$1</h1>'));
-      continue;
-    }
-
-    // ---- 列表（每行都以 - 开头） ----
     var lines = safe.split('\n');
-    var allListItems = true;
-    for (var j = 0; j < lines.length; j++) {
-      if (lines[j] !== '' && !/^- .+/.test(lines[j])) { allListItems = false; break; }
-    }
-    if (allListItems && lines.some(function(l) { return /^- .+/.test(l); })) {
-      safe = safe.replace(/^- (.+)$/gm, '<li>$1</li>');
-      htmlParts.push('<ul>' + safe + '</ul>');
-      continue;
-    }
 
-    // ---- 代码块 ----
+    // ---- 纯分隔线 ----
+    if (lines.length === 1 && /^[-]{3,}$/.test(safe)) { result += '<hr>\n'; continue; }
+    if (lines.length === 1 && /^[\*]{3,}$/.test(safe)) { result += '<hr>\n'; continue; }
+    if (lines.length === 1 && /^[_]{3,}$/.test(safe)) { result += '<hr>\n'; continue; }
+
+    // ---- 代码块（整块以 ``` 开头和结尾） ----
     if (/^```/.test(safe)) {
       safe = safe.replace(/```\w*\n?/g, '').replace(/```/g, '');
-      htmlParts.push('<pre><code>' + safe + '</code></pre>');
+      result += '<pre><code>' + safe + '</code></pre>\n';
       continue;
     }
 
-    // ---- 普通段落 ----
-    // 行内格式
-    safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
-    safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    safe = safe.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    // 单换行 → <br>
-    safe = safe.replace(/\n/g, '<br>');
-    htmlParts.push('<p>' + safe + '</p>');
+    // ---- 逐行扫描（支持混合块：标题+列表+段落共存） ----
+    var inUl = false, inOl = false;
+    var blockHtml = '';
+
+    for (var j = 0; j < lines.length; j++) {
+      var line = lines[j].trim();
+      if (!line) continue;
+
+      // 嵌套分隔线（行内的 ---）
+      if (/^[-]{3,}$/.test(line)) { blockHtml += '<hr>\n'; continue; }
+
+      // h3: ### text
+      if (/^### .+/.test(line)) {
+        blockHtml += '<h3>' + fmtLine(line.replace(/^### /, '')) + '</h3>\n';
+        continue;
+      }
+      // h2: ## text
+      if (/^## .+/.test(line)) {
+        blockHtml += '<h2>' + fmtLine(line.replace(/^## /, '')) + '</h2>\n';
+        continue;
+      }
+      // h1: # text
+      if (/^# .+/.test(line)) {
+        blockHtml += '<h1>' + fmtLine(line.replace(/^# /, '')) + '</h1>\n';
+        continue;
+      }
+
+      // 无序列表项
+      if (/^[-*] .+/.test(line)) {
+        if (!inUl) { inUl = true; blockHtml += '<ul>\n'; }
+        blockHtml += '<li>' + fmtLine(line.replace(/^[-*] /, '')) + '</li>\n';
+        continue;
+      }
+
+      // 有序列表项
+      if (/^\d+[\.\)]\s+.+/.test(line)) {
+        if (!inOl) { inOl = true; blockHtml += '<ol>\n'; }
+        blockHtml += '<li>' + fmtLine(line.replace(/^\d+[\.\)]\s+/, '')) + '</li>\n';
+        continue;
+      }
+
+      // 非列表项 → 先关闭列表，再输出段落
+      if (inUl) { blockHtml += '</ul>\n'; inUl = false; }
+      if (inOl) { blockHtml += '</ol>\n'; inOl = false; }
+
+      // 引用行
+      if (/^&gt; /.test(line)) {
+        blockHtml += '<blockquote>' + fmtLine(line.replace(/^&gt; /, '')) + '</blockquote>\n';
+        continue;
+      }
+
+      // 普通行（用 <br> 连接）
+      blockHtml += '<p>' + fmtLine(line) + '</p>\n';
+    }
+
+    // 关闭未闭合的列表
+    if (inUl) { blockHtml += '</ul>\n'; }
+    if (inOl) { blockHtml += '</ol>\n'; }
+
+    result += blockHtml;
   }
 
-  return htmlParts.join('\n');
+  return result;
 }
 
 function formatTime(iso) {
@@ -679,14 +721,26 @@ const App = {
     const statusText = document.getElementById('statusText');
     const input = document.getElementById('messageInput');
 
-    if (mode === 'support') {
-      statusText.textContent = '🤖 智能客服';
-      input.placeholder = '输入你遇到的问题，我会从知识库中为你查找答案...';
-      Chat._showSupportEmpty();
-    } else {
-      statusText.textContent = 'API 在线';
-      input.placeholder = '输入你的旅行需求...';
-      Chat._showEmpty();
+    switch (mode) {
+      case 'support':
+        statusText.textContent = '🤖 智能客服';
+        input.placeholder = '输入你遇到的问题，我会从知识库中为你查找答案...';
+        Chat._showSupportEmpty();
+        break;
+      case 'sales':
+        statusText.textContent = '💰 销售咨询';
+        input.placeholder = '咨询报价、查询库存、签约流程...';
+        Chat._showSalesEmpty();
+        break;
+      case 'operations':
+        statusText.textContent = '📋 运营处理';
+        input.placeholder = '商家入驻、订单履约、售后工单...';
+        Chat._showOperationsEmpty();
+        break;
+      default:
+        statusText.textContent = 'API 在线';
+        input.placeholder = '输入你的旅行需求...';
+        Chat._showEmpty();
     }
   },
 
@@ -779,6 +833,16 @@ const Auth = {
     this._showLogin();
   },
 
+  /** 强制退回登录（token 过期/无效时由 api() 调用，不清除 toast） */
+  _forceLogout() {
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    localStorage.removeItem('user_id');
+    Conversations._clear();
+    Chat._clear();
+    this._showLogin();
+  },
+
   getToken() { return localStorage.getItem('token'); },
 
   _showLogin() {
@@ -812,7 +876,14 @@ async function api(method, path, body) {
   if (body) opts.body = JSON.stringify(body);
   const resp = await fetch(API_BASE + path, opts);
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+  if (!resp.ok) {
+    // 401/403 → token 无效或过期，强制退回登录页
+    if (resp.status === 401 || resp.status === 403) {
+      Auth._forceLogout();
+      throw new Error('登录已过期，请重新登录');
+    }
+    throw new Error(data.detail || `HTTP ${resp.status}`);
+  }
   return data;
 }
 
@@ -1173,7 +1244,7 @@ const Chat = {
       if (msgMode && msgMode !== Chat._lastMode && Chat._lastMode !== undefined) {
         const divider = document.createElement('div');
         divider.className = 'mode-divider';
-        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服' };
+        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服', sales: '💰 销售咨询', operations: '📋 运营处理' };
         divider.textContent = labels[msgMode] || msgMode;
         container.appendChild(divider);
       }
@@ -1184,9 +1255,9 @@ const Chat = {
       // Mode badge above user bubble
       let modeBadgeHtml = '';
       if (data.mode) {
-        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服' };
+        const labels = { planner: '🗺️ 行程定制', support: '🤖 智能客服', sales: '💰 销售咨询', operations: '📋 运营处理' };
         const label = labels[data.mode] || data.mode;
-        const cls = data.mode === 'support' ? 'mode-support' : 'mode-planner';
+        const cls = 'mode-' + (['planner','support','sales','operations'].includes(data.mode) ? data.mode : 'planner');
         modeBadgeHtml = `<div class="mode-badge ${cls}">${label}</div>`;
       }
       div.innerHTML = `<div class="msg-avatar">👤</div><div class="msg-content">${modeBadgeHtml}<div class="msg-bubble">${escapeHtml(data.content)}</div></div>`;
@@ -1301,6 +1372,40 @@ const Chat = {
           <button class="quick-faq-btn" onclick="Chat.sendQuick('当地天气怎么样？')">🌤️ 天气查询</button>
           <button class="quick-faq-btn" onclick="Chat.sendQuick('怎么坐高铁和地铁？')">🚄 交通出行</button>
           <button class="quick-faq-btn" onclick="Chat.sendQuick('旅行安全注意事项有哪些？')">🛡️ 安全须知</button>
+        </div>
+      </div>`;
+    }
+  },
+
+  _showSalesEmpty() {
+    const container = document.getElementById('chatMessages');
+    if (container.querySelector('.chat-empty') || container.children.length === 0) {
+      container.innerHTML = `<div class="chat-empty">
+        <div class="chat-empty-icon">💰</div>
+        <div style="font-size:15px;font-weight:500;">销售咨询</div>
+        <div style="font-size:13px;margin-bottom:4px;">我是您的旅行顾问，可以生成报价、查询库存、协助签约</div>
+        <div class="quick-faqs">
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('帮我算一下去三亚5天4晚大概多少钱？')">💵 行程报价</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('十一期间还有空房吗？')">🏨 库存查询</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('怎么签约和支付？')">✍️ 签约流程</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('有没有优惠活动？')">🎁 优惠活动</button>
+        </div>
+      </div>`;
+    }
+  },
+
+  _showOperationsEmpty() {
+    const container = document.getElementById('chatMessages');
+    if (container.querySelector('.chat-empty') || container.children.length === 0) {
+      container.innerHTML = `<div class="chat-empty">
+        <div class="chat-empty-icon">📋</div>
+        <div style="font-size:15px;font-weight:500;">运营处理</div>
+        <div style="font-size:13px;margin-bottom:4px;">我可以帮您处理商家入驻、订单履约、售后工单等运营事务</div>
+        <div class="quick-faqs">
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('我想入驻平台成为商家')">🏪 商家入驻</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('查询我的订单状态')">📦 订单履约</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('我要提交售后工单')">🔧 售后工单</button>
+          <button class="quick-faq-btn" onclick="Chat.sendQuick('平台合作规则是什么？')">📜 平台规则</button>
         </div>
       </div>`;
     }

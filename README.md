@@ -157,6 +157,14 @@ Multi_Agent/
 
 ## 快速开始
 
+### 前置条件
+
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Docker Desktop | 最新版 | 容器运行环境（Windows/Mac/Linux） |
+| Python | ≥ 3.12 | 仅本地开发模式需要 |
+| 百炼 API Key | — | 阿里云百炼控制台获取 |
+
 ### Docker 部署（推荐）
 
 > 💡 国内网络环境已配置阿里云镜像源（apt + pip），无需额外配置即可快速构建。
@@ -168,43 +176,80 @@ cd Multi-Agent-Travel-System
 
 # 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env，将 LLM_API_KEY 替换为你的百炼 API Key
+# 编辑 .env：
+#   - 将 LLM_API_KEY 替换为你的百炼 API Key
+#   - 生产环境务必修改 JWT_SECRET_KEY 为随机字符串
+#   - 其余配置保持默认即可
 
-# 3. 一键启动所有服务
+# 3. 一键启动所有服务（首次构建约 3-5 分钟）
 docker-compose up --build -d
 
-# 4. 导入知识库（首次启动后）
-docker-compose exec app python scripts/ingest_knowledge.py
+# 4. 等待所有服务健康（约 60s）
+docker-compose ps
+# 确认各服务状态为 healthy 或 running
 
-# 5. 访问
-# 前端：http://localhost:8000（若端口冲突则用 8001）
-# API 文档：http://localhost:8000/docs
-# 健康检查：http://localhost:8000/health
+# 5. 导入知识库（首次启动后执行一次）
+docker-compose exec app python scripts/ingest_knowledge.py
+# 预期输出：Successfully ingested 30 documents in ~3s
+
+# 6. 验证部署
+curl http://localhost:8001/health
+# → {"status":"ok","version":"0.3.0","components":{"mysql":"ok","redis":"ok","milvus":{"status":"ok","count":30,...}}}
+
+# 7. 浏览器打开 http://localhost:8001
+# 注册账号 → 登录 → 新建对话 → 发送消息测试
 ```
 
-> **端口说明**：若宿主机 8000/3306 已被占用，docker-compose.yml 已配置回退端口 8001→8000 / 3307→3306。
+**Docker 服务端口映射**：
+
+| 服务 | 容器端口 | 宿主机端口 | 说明 |
+|------|:---:|:---:|------|
+| app (FastAPI) | 8000 | 8001 | 若 8001 冲突可改为 8000 |
+| mysql | 3306 | 3307 | 若 3307 冲突可改为 3306 |
+| redis | 6379 | 6379 | — |
+| milvus | 19530 | 19530 | REST API |
+
+> **端口说明**：若宿主机 8000/3306 已被占用，docker-compose.yml 已配置回退端口 8001→8000 / 3307→3306。如仍需修改，编辑 `docker-compose.yml` 中 `ports` 映射即可。
 
 ### 本地开发
 
 ```bash
-# 前置条件：启动基础设施服务
+# 1. 启动基础设施（不含 app，避免端口冲突）
 docker-compose up -d mysql redis etcd minio milvus-standalone
 
-# 若端口冲突，通过环境变量指定端口
-export MYSQL_HOST=localhost MYSQL_PORT=3307
-export REDIS_HOST=localhost
-export MILVUS_HOST=localhost
+# 2. 配置 .env 中的连接地址为本地端口
+# MYSQL_HOST=localhost  MYSQL_PORT=3307
+# REDIS_HOST=localhost  REDIS_PORT=6379
+# MILVUS_HOST=localhost MILVUS_PORT=19530
 
-# 安装依赖
+# 3. 安装 Python 依赖
 pip install -r requirements.txt
 
-# 启动服务
-python -m api.main
+# 4. 导入知识库
+python scripts/ingest_knowledge.py
 
-# 或运行测试
-python -m api.main test
-python -m api.main test --quick   # 快速模式（跳过行程生成）
+# 5. 启动应用
+python -m api.main
+# → 访问 http://localhost:8000
+
+# 6. 运行测试
+python -m pytest tests/ -v          # 全部 193 个测试
+python -m api.main test             # E2E 集成测试（12 组）
+python -m api.main test --quick     # 快速模式（跳过行程生成）
 ```
+
+### 常见问题
+
+| 现象 | 原因 | 解决方案 |
+|------|------|------|
+| **"令牌无效或已过期"** | Token 过期（24h）或浏览器缓存了旧 token | 刷新页面会自动跳转登录页（v0.3.1+），重新登录即可 |
+| **"MySQL not initialized"** | Docker MySQL 容器未启动 | `docker-compose up -d mysql`，等待 healthy 后重试 |
+| **端口冲突 (8000/3306)** | 宿主机端口被占用 | 使用备选端口 8001/3307（docker-compose 已配置），或修改 .env |
+| **前端页面空白/无法加载** | API 服务离线或 CORS 问题 | `docker-compose ps` 确认 app 容器状态，检查浏览器控制台错误 |
+| **知识库检索无结果** | Milvus 未就绪或未导入 | 等待 60s 后执行 `docker-compose exec app python scripts/ingest_knowledge.py` |
+| **行程生成长时间无响应** | qwen3-max 推理需 30-120s | 正常现象，SSE 流式界面会显示实时进度（"正在分析意图…"→"正在生成行程…"） |
+| **Docker 构建失败** | 镜像拉取超时（国内网络） | 已配置阿里云 apt/pip 镜像，如仍超时可配置 Docker 镜像加速器 |
+| **登录后无法新建对话** | MySQL 连接失败但被静默处理 | 检查 `docker-compose logs mysql`，确认端口映射和密码正确 |
 
 ## API 接口
 
@@ -368,7 +413,9 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 13-续 | 语言选择器恢复——5 种语言（zh/en/hi/es/ar）完整支持，后端指令注入 + 前端并排下拉框 | ✅ |
 | Phase 13-续-2 | 模式视觉区分增强——Bug 修复 current_branch 映射 + 前端三层标记（用户模式标签/Agent 左侧色条/气泡内分支标签/切换分隔线） | ✅ |
 | Phase 13-续-3 | 自定义确认对话框——替换浏览器 confirm()，卡片式 UI + 动画 + ESC/遮罩关闭 | ✅ |
-| Phase 14 | UI 全局重设计——Skyline 天蓝旅行主题（浅色侧边栏 + 统一色系 + 两层同步） | ✅ |
+| Phase 14 | UI 全局重设计——Skyline 天蓝旅行主题（浅色侧边栏 + 统一色系） | ✅ |
+| Phase 15 | Token 过期修复 + 环境变量补齐 + 启动流程文档完善 | ✅ |
+| Phase 16 | 前端模式选择器补齐销售/运营 Agent——4 Agent 完整可手动切换 | ✅ |
 
 ## 许可证
 

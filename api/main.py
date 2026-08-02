@@ -656,7 +656,11 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
-            "force_branch": "customer_service" if req.mode == "support" else "",
+            "force_branch": {
+                "support": "customer_service",
+                "sales": "sales_agent",
+                "operations": "operations_agent",
+            }.get(req.mode, "trip_planner" if req.mode == "planner" else ""),
         }
 
         result = await _graph.ainvoke(
@@ -780,7 +784,11 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "customer_id": user["user_id"],
             "channel": req.channel,
             "language": req.language,
-            "force_branch": "customer_service" if req.mode == "support" else "",
+            "force_branch": {
+                "support": "customer_service",
+                "sales": "sales_agent",
+                "operations": "operations_agent",
+            }.get(req.mode, "trip_planner" if req.mode == "planner" else ""),
         }
 
         final_state = None
@@ -797,18 +805,22 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             except Exception:
                 pass
 
+            stream_config = {"configurable": {"thread_id": req.conversation_id}}
             async for event in _graph.astream(
                 initial_state,
-                config={"configurable": {"thread_id": req.conversation_id}},
+                config=stream_config,
                 stream_mode="updates",
             ):
                 for node_name, node_output in event.items():
                     label = NODE_LABELS.get(node_name, f"正在执行 {node_name}...")
                     yield f"event: node_start\ndata: {json.dumps({'node': node_name, 'label': label}, ensure_ascii=False)}\n\n"
-                    final_state = node_output
                     yield f"event: node_complete\ndata: {json.dumps({'node': node_name}, ensure_ascii=False)}\n\n"
 
-            # 构建最终响应（正常完成）
+            # 构建最终响应（正常完成）——从 LangGraph checkpoint 读取完整 State
+            # stream_mode="updates" 只返回各节点的部分输出，需要用 aget_state 获取全量
+            final_snapshot = await _graph.aget_state(stream_config)
+            final_state = final_snapshot.values if final_snapshot and final_snapshot.values else {}
+
             if final_state:
                 draft = final_state.get("draft", {}) or {}
                 draft_resp = None

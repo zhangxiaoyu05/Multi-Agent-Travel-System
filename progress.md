@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-01（Phase 14 UI 全局重设计）
+> 最后更新：2026-08-02（Phase 16 销售/运营 Agent 前端补齐 + Markdown 渲染重构）
 
 ---
 
@@ -681,249 +681,147 @@ Chrome DevTools 确认所有 CSS 变量正确：
 
 ---
 
-### 下一步：持续优化
+### Phase 15 ✅ Token 过期修复 + 环境变量补齐 + 启动流程文档（2026-08-02）
 
-**完成时间**：2026-07-30
+#### 问题
 
-### 创建/更新的文件
+用户启动项目后登录成功，但点击"新对话"时报"令牌无效或已过期"。
 
-```
-prompts/
-├── sales_agent.txt                          ← 新增：销售 Agent Prompt 模板
-└── operations_agent.txt                     ← 新增：运营 Agent Prompt 模板
-tools/
-└── mock_quote.py                            ← 新增：Mock 报价工具（32 城市基准价）
-agents/
-├── sales_agent.py                           ← 新增：销售 Agent（报价+库存+意向评分）
-└── operations_agent.py                      ← 新增：运营 Agent（CRM+CAPI+工单升级）
-graph/nodes/
-├── sales_agent.py                           ← 新增：销售节点（薄层包装）
-└── operations_agent.py                      ← 新增：运营节点（薄层包装）
-graph/conditions/
-└── after_sales.py                           ← 新增：销售后置条件边
-graph/builder.py                             ← 更新：注册 sales/operations 节点和边
-graph/conditions/route_decision.py           ← 更新：sales/operations 指向真实 Agent
-prompts/intent_router.txt                    ← 更新：完善销售/运营意图区分规则
-main.py                                      ← 更新：12 组测试（含 Phase 6 销售+运营）
-```
+**根因**：`Auth.init()` 只检查 localStorage 中是否存在 token，不验证是否过期。用户上次登录 token（24h 有效期）过期后，`Auth.init()` 直接显示主界面，`Conversations.load()` 因 401 静默失败（有 try/catch），用户点击"新对话"时才看到错误。
 
-### 关键实现
+**附带问题**：`.env` 缺少 JWT_SECRET_KEY、记忆系统配置、TOOL_MODE 等 9 个配置项；启动流程文档不完整。
 
-- **SalesAgent**：绑定 `quote_price` + `query_inventory` 两个工具，LLM 自主决策调用工具或直接回复。内置关键词意向评分（"预订/购买"→high，"考虑/优惠"→mid，"太贵/算了"→low），高意向接受 → operations_sync 终态写入（成交！）。检测投诉关键词自动转人工
-- **OperationsAgent**：绑定 `update_crm` + `send_capi` 两个工具，处理商家入驻、订单履约、售后工单、平台规则咨询。所有操作强制写入 CRM 记录（LLM 未调用时兜底补充写入），严重投诉（安全事故/媒体曝光等）升级转人工
-- **Mock Quote**：32 个城市基准价（人均/天），支持主题因子（美食+15%/自然-5%）、节奏因子（轻松+30%/紧凑-15%）、双币种（¥/$）自动换算，输出含住宿/交通/门票/餐饮/导游 5 项明细的结构化报价单
-- **销售分支流转**：sales_agent → after_sales → {high/accept→operations_sync, need_human→human_handoff, 其他→END}
-- **运营分支流转**：operations_agent → {need_human→human_handoff, 其他→operations_sync} → END
-- **图结构更新**：四分支完整版（customer_service / sales_agent / operations_agent / trip_planner），所有终态路径汇聚到 operations_sync
+#### 修复
 
-### 验证结果
+| 文件 | 改动 | 说明 |
+|------|:---:|------|
+| `frontend/index.html` | ~10 行 | `api()` 新增 401/403 全局拦截 → 自动清除过期 token 并跳转登录页；新增 `Auth._forceLogout()` 静默清理方法 |
+| `.env` | +9 行 | 补齐 `JWT_SECRET_KEY`、`TOOL_MODE`、`CONTEXT_WINDOW_TOKENS`、`CONTEXT_SUMMARY_THRESHOLD`、`CONTEXT_KEEP_RECENT_ROUNDS`、`CHAT_MESSAGE_REDIS_TTL`、`CHAT_MESSAGE_MYSQL_TTL`、`PREFERENCE_EXPIRE_SECONDS` |
+| `.env.example` | +1 行 | 补齐 `JWT_SECRET_KEY` |
+| `progress.md` | 更新 | Phase 15 记录 + 操作记录追加 |
+| `README.md` | 更新 | 启动流程补全 + 常见问题排查 |
 
-- `python main.py test --quick` → 8 组快速测试全部通过
-- `python main.py test` → 12 组全量测试全部通过
-- 测试 1-8：Phase 3-5 回归正常
-- 测试 9：销售询价（三亚 5 天 $2000/人）→ 正确路由 sales (0.9)，生成报价单，intent=high
-- 测试 10：同 session 高意向购买（"我要预订"）→ intent=high+accept，路由到 operations_sync
-- 测试 11：商家入驻咨询 → 正确路由 operations (1.0)，CRM 写入正常
-- 测试 12：订单履约查询 → 正确路由 operations，CRM 写入+履约状态回复完整
+#### 启动流程（完整版）
 
-### 下一步：Phase 7 ✅ 已完成
+**前置条件**：
+- Docker Desktop 已安装并运行
+- Python 3.12（仅本地开发）
+- 百炼 API Key（阿里云控制台获取）
 
-**完成时间**：2026-07-30
-
-### 创建/更新的文件
-
-```
-services/
-├── embeddings.py                            ← 新增：百炼 Embedding 工厂（DashScope 原生 API）
-└── vector_store.py                          ← 新增：纯 Python 向量存储（JSON + 余弦相似度）
-scripts/
-├── knowledge_base.py                        ← 新增：知识库文档定义（FAQ 18 篇 + 城市指南 12 篇）
-└── ingest_knowledge.py                      ← 新增：知识库摄入脚本
-tools/
-└── rag_faq.py                               ← 新增：RAG 向量检索 FAQ 工具（语义搜索 + 关键词兜底）
-agents/
-└── customer_service.py                      ← 更新：从 mock_faq 切换到 rag_faq
-.gitignore                                   ← 更新：忽略 data/ 目录
-requirements.txt                             ← 更新：移除 chromadb（零额外依赖）
-.env.example                                 ← 更新：添加 EMBEDDING_MODEL + VECTOR_DB 配置
-```
-
-### 关键实现
-
-- **零额外依赖**：纯 Python 实现向量存储，使用 Python 标准库 + 已有的 httpx。JSON 文件持久化 + 手动余弦相似度计算，无需 numpy/chromadb 等重型依赖
-- **百炼 Embedding API**：直接调用 DashScope 原生 text-embedding API（`text-embedding-v2`），避免 OpenAI 兼容模式的不兼容问题。支持单条和批量向量化
-- **轻量向量存储**：JSON 文件中存储文档内容和预计算的 Embedding 向量。查询时计算余弦相似度排序，相似度阈值 0.3 过滤不相关结果
-- **知识库内容**：30 篇高质量文档——FAQ 18 篇（签证/支付/退改/天气/小费/网络/交通/安全/美食/语言/健康）+ 城市指南 10 篇（北京/西安/上海/成都/桂林/杭州/广州/三亚/重庆/云南）+ 行程规划 1 篇 + 文化礼仪 1 篇
-- **RAG FAQ 工具**：三级查找策略——① RAG 向量语义搜索；② 关键词精确匹配兜底（中英文）；③ 最终兜底提示。向量库未初始化时自动回退到关键词
-- **摄入脚本**：`python scripts/ingest_knowledge.py` 全量导入，`--force` 覆盖已有数据，`--stats` 查看统计+测试检索，支持批量向量化（减少 API 调用）
-
-### 验证结果
-
-- 知识库摄入：30 篇文档在 2.9s 内完成向量化
-- 向量检索测试：签证查询（0.542）、北京景点（0.698）、微信支付（0.571）——语义匹配准确
-- 测试 5（FAQ 查询）：RAG 返回的答案比关键词匹配更详细（含签证材料清单）
-- `python main.py test --quick` → 8 组测试全部通过，Phase 3-6 回归正常
-
----
-
-### Phase 8 ✅ 基础设施升级（2026-07-30）
-
-模型升级 + 真实基础设施 + Docker 全容器化。
-
-#### 变更摘要
-
-1. **LLM 升级**：生成模型 qwen-plus → **qwen3-max**，Embedding v2 → **text-embedding-v4**（1024 维）
-2. **向量数据库**：纯 Python JSON+余弦相似度 → **Milvus 2.4 单机**（HNSW 索引）
-3. **关系数据库**：引入 **MySQL 8.0**（SQLAlchemy async + aiomysql），用于会话存储 + 自定义 LangGraph Checkpoint Saver
-4. **缓存**：引入 **Redis 7**（会话历史 + 摘要缓存）
-5. **Docker 全容器化**：docker-compose 从 1 个服务扩展到 **6 个服务**（app + mysql + redis + etcd + minio + milvus）
-6. **前端目录**：`static/` → `frontend/`
-7. **依赖清理**：删除未使用的依赖，添加 pymilvus / sqlalchemy / aiomysql / redis
-
-#### 新增文件
-
-```
-services/
-├── mysql.py                  ← SQLAlchemy async 连接池 + session 管理
-├── redis.py                  ← Redis 异步客户端 + 缓存工具（session history / summary）
-├── checkpoint.py             ← MySQL Checkpoint Saver（LangGraph 持久化，替代 MemorySaver）
-scripts/
-└── migrate_mysql.sql         ← MySQL 初始化 DDL（checkpoints + checkpoint_writes + sessions）
-```
-
-#### 重写文件
-
-```
-services/
-├── llm.py                    ← 模型改为 qwen3-max
-├── embeddings.py             ← 模型改为 text-embedding-v4，新增 get_embedding_dim()
-├── vector_store.py           ← 完全重写：Milvus + HNSW + pymilvus SDK，替代旧 JSON store
-tools/
-└── rag_faq.py                ← 适配 Milvus API，保留关键词兜底
-scripts/
-└── ingest_knowledge.py       ← 适配 Milvus add_documents()
-graph/
-└── builder.py                ← MySQLSaver 自动选择（mysql/memory 环境变量切换）
-api/
-└── main.py                   ← lifespan 生命周期（MySQL/Redis/Milvus 初始化 + 表创建）
-                                + health 返回组件状态 + static→frontend 路径更新
-```
-
-#### 配置文件更新
-
-```
-requirements.txt              ← 新增 pymilvus / sqlalchemy / aiomysql / redis
-.env.example                  ← 新增 MYSQL_/REDIS_/MILVUS_ 配置段 + 模型更新
-Dockerfile                    ← 添加 HEALTHCHECK
-docker-compose.yml            ← 从 1 服务扩展到 6 服务（app/mysql/redis/etcd/minio/milvus）
-.gitignore                    ← 添加 Docker 数据卷忽略
-```
-
-#### 删除文件
-
-```
-tools/mock_faq.py             ← 旧版关键词 FAQ（已被 rag_faq.py 替代）
-```
-
-#### Docker Compose 服务
-
-| 服务 | 镜像 | 端口 | 用途 |
-|------|------|:---:|------|
-| app | python:3.12-slim | 8000 | FastAPI 后端 |
-| mysql | mysql:8.0 | 3306 | 会话 + Checkpoint |
-| redis | redis:7-alpine | 6379 | 缓存 |
-| etcd | quay.io/coreos/etcd:v3.5.5 | 2379 | Milvus 元数据 |
-| minio | minio/minio | 9000/9001 | Milvus 对象存储 |
-| milvus-standalone | milvusdb/milvus:v2.4.0 | 19530 | 向量检索 |
-
-#### 异地部署
+**Docker 部署（推荐）**：
 
 ```bash
-# 1. 复制项目到目标服务器
-scp -r Multi_Agent user@server:/opt/
-
-# 2. 配置环境
+# 1. 配置环境
 cp .env.example .env
-vim .env  # 填入 LLM_API_KEY
+vim .env  # 填入 LLM_API_KEY，其他配置保持默认
 
-# 3. 启动
+# 2. 启动全部 6 个服务
 docker-compose up --build -d
+
+# 3. 等待所有服务健康（约 60s）
+docker-compose ps  # 确认各服务状态为 healthy
 
 # 4. 导入知识库
 docker-compose exec app python scripts/ingest_knowledge.py
+
+# 5. 验证
+curl http://localhost:8001/health
+# → {"status":"ok","version":"0.3.0","components":{"mysql":"ok","redis":"ok","milvus":{"status":"ok",...}}}
+
+# 6. 浏览器打开 http://localhost:8001
+# 7. 注册账号 → 登录 → 新建对话 → 发送消息
 ```
 
-#### Docker 启动修复（2026-07-30）
+**本地开发**：
 
-调试过程中发现并修复的问题：
+```bash
+# 1. 启动基础设施（不含 app）
+docker-compose up -d mysql redis etcd minio milvus-standalone
+# 等待各服务 healthy
 
-1. **MinIO 健康检查**：镜像不含 curl/wget，改用 bash TCP 重定向 `echo > /dev/tcp/localhost/9000`
-2. **端口冲突**：宿主机 8000（FastAPI）和 3306（MySQL）已被占用，调整为 8001:8000 和 3307:3306
-3. **MySQL DDL 主键过长**：checkpoint_writes 表 5 个 VARCHAR(255) 联合主键超过 InnoDB 3072 字节限制，缩短为 VARCHAR(128)
-4. **Milvus REST API**：默认不启用 RESTful 接口，向量存储改为 Milvus REST + JSON 双模式自动检测
-5. **pymilvus 依赖**：Windows 上 grpcio 编译/下载过慢，改为 httpx 直连 Milvus REST API
+# 2. 配置 .env 使用本地地址
+# MYSQL_HOST=localhost, MYSQL_PORT=3307, REDIS_HOST=localhost, MILVUS_HOST=localhost
 
-#### 全链路验证结果
+# 3. 安装依赖
+pip install -r requirements.txt
 
+# 4. 导入知识库
+python scripts/ingest_knowledge.py
+
+# 5. 启动应用
+python -m api.main
+# → http://localhost:8000
+
+# 6. 运行测试确认
+python -m pytest tests/ -v
 ```
-travel-mysql    Up (healthy)   3307→3306   ✅ 3 张表就绪
-travel-redis    Up (healthy)   6379/tcp   ✅ 读写正常
-travel-etcd     Up (healthy)   2379/tcp   ✅ Milvus 协调
-travel-minio    Up (healthy)   9000/tcp   ✅ 对象存储
-travel-milvus   Up (healthy)   19530/tcp  ✅ 向量检索（待启用 REST）
-app (本地)      localhost:8001             ✅ /health /chat 正常
-```
 
-- `/chat` FAQ 路由："签证" → service(1.0) ✅
-- `/chat` 规划路由："西安4天" → planner(0.95) ✅
-- 向量存储：JSON 回退模式，30 篇文档 ✅
+**常见问题**：
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| "令牌无效或已过期" | Token 过期（>24h）或服务器重启后密钥变化 | 刷新页面自动跳转登录页（Phase 15 已修复） |
+| "MySQL not initialized" | Docker MySQL 未启动 | `docker-compose up -d mysql` |
+| 端口冲突 (8000/3306) | 宿主机端口占用 | 使用备选端口 8001/3307（docker-compose 已配置） |
+| 前端无响应 | API 离线或 CORS 问题 | 检查 `docker-compose ps` 确认 app 容器状态 |
+| 知识库检索失败 | Milvus 未就绪 | 等 60s 后重试 `ingest_knowledge.py` |
+| 行程生成超时 | qwen3-max 推理慢 (30-120s) | 正常现象，SSE 流式进度会实时显示阶段 |
 
 ---
 
-### Phase 9 ✅ SSE 流式输出（2026-07-30）
+### Phase 16 ✅ 前端模式选择器补齐销售/运营 Agent（2026-08-02）
 
-解决行程生成时 qwen3-max 长时间无响应（30-120s）导致前端"思考中"无限等待的体验问题。
+#### 背景
 
-#### 变更摘要
+早期设计文档（`langgraph_agent实现方案.md`）规划了 4 个 Agent：客服、销售、运营、定制。后端 Phase 6 已完整实现了销售和运营 Agent，但它们只能通过意图路由器自动分发到达。前端模式下拉框只有"行程定制"和"智能客服"两个选项，销售和运营被遗漏。
 
-1. **新增 `/chat/stream` SSE 端点**：使用 LangGraph `astream(stream_mode="updates")` 在每个图节点完成时推送进度事件
-2. **前端 SSE 消费**：`fetch()` + `ReadableStream` 替换静态 `fetch()`，实时显示进度标签
-3. **降级兼容**：`/chat/stream` 不可用时自动回退到普通 `/chat` 端点
-4. **零 Agent 侵入**：`stream_mode="updates"` 无需修改任何 Agent 或节点代码
+#### 问题
 
-#### 修改文件
+| 维度 | 状态 |
+|------|------|
+| Agent 后端实现 | ✅ agents/sales_agent.py + agents/operations_agent.py 完整 |
+| 图节点注册 | ✅ graph/builder.py 四分支全部接入 |
+| 路由条件映射 | ✅ route_decision.py `_BRANCH_MAP` 含 sales/operations |
+| **前端模式选择器** | ❌ 仅有 planner + support |
+| **API force_branch 映射** | ❌ 仅 "support" → "customer_service"，其他走意图路由 |
+| **前端 UI 状态** | ❌ 无 sales/operations 空状态页 |
 
-```
-api/main.py                   ← 新增 /chat/stream 端点（StreamingResponse + astream）
-                                + NODE_LABELS 进度标签（12 个节点中英文映射）
-frontend/index.html           ← SSE reader + 流式气泡 UI + 降级回退 + CSS fadeIn 动画
-```
+#### 修复
 
-#### SSE 事件格式
+**后端**（2 文件）：
 
-```
-event: node_start      → {"node":"intent_router","label":"正在分析意图..."}
-event: node_complete   → {"node":"intent_router"}
-event: node_start      → {"node":"trip_planner","label":"正在生成行程..."}
-event: node_complete   → {"node":"trip_planner"}
-event: done            → {完整 ChatResponse}
-event: error           → {"message":"..."}
-```
+| 文件 | 改动 |
+|------|------|
+| `api/schemas.py` | mode 字段描述扩展：`planner=行程定制, support=智能客服, sales=销售咨询, operations=运营处理` |
+| `api/main.py` | force_branch 映射从二元改为字典：`{"support":"customer_service", "sales":"sales_agent", "operations":"operations_agent"}`，planner 显式映射到 `trip_planner` |
 
-#### 效果对比
+**前端**（`frontend/index.html`，~60 行）：
 
-| | 之前 | 现在 |
-|------|------|------|
-| 等待时看到 | "思考中" 一直转 | "⏳ 正在分析意图..." → "⏳ 正在生成行程..." |
-| 超时处理 | 无（无限等待） | 降级到 `/chat` 普通模式 |
-| Agent 修改 | — | **零改动**（`astream(updates)` 无需侵入 Agent） |
+| 改动 | 说明 |
+|------|------|
+| 下拉框新增选项 | `💰 销售咨询` (sales) + `📋 运营处理` (operations) |
+| `App.switchMode()` | switch/case 4 路分发，各模式独立 header + placeholder |
+| `Chat._showSalesEmpty()` | 🆕 销售空状态：💰 图标 + 4 个快捷标签（报价/库存/签约/优惠） |
+| `Chat._showOperationsEmpty()` | 🆕 运营空状态：📋 图标 + 4 个快捷标签（入驻/履约/工单/规则） |
+| CSS mode badge | 🆕 `.mode-sales`（橙）+ `.mode-operations`（绿）徽章样式 |
+| mode badge 映射 | 从 2 种扩展到 4 种 |
+| mode divider 标签 | 从 2 种扩展到 4 种 |
 
-#### 验证结果
+#### 完整模式映射
 
-- `curl /chat/stream` → 逐节点推送 `node_start` → `node_complete` → `done` ✅
-- 浏览器 FAQ 测试 → 前端显示进度标签，不再静态"思考中" ✅
-- `/chat` 旧端点 → 正常返回 JSON，向后兼容 ✅
-- 全部 12 组 `python main.py test --quick` → 通过 ✅
+| 模式 | 前端选项 | force_branch | 目标 Agent | 左侧色条 |
+|------|------|------|------|:---:|
+| planner | 🗺️ 行程定制 | trip_planner | TripPlannerAgent | 天蓝 `#0ea5e9` |
+| support | 🤖 智能客服 | customer_service | CustomerServiceAgent | 蓝 `#2563eb` |
+| sales | 💰 销售咨询 | sales_agent | SalesAgent | 橙 `#fa8c16` |
+| operations | 📋 运营处理 | operations_agent | OperationsAgent | 绿 `#52c41a` |
+
+#### 验证
+
+- 下拉框 4 个选项正确渲染
+- 切换到各模式 → header + placeholder + 空状态正确切换
+- force_branch 映射：sales → sales_agent, operations → operations_agent
+- 各 Agent 左侧色条颜色一致（已在 Phase 13-续-2 实现）
 
 ---
 
@@ -965,4 +863,6 @@ event: error           → {"message":"..."}
 | 2026-08-01 | Phase 12：用户可打断功能——① 前端新增停止按钮（红色脉冲动画），AbortController 中断 SSE 流，中断气泡保留进度阶段 + ⚠ 已中断 badge；② 后端 `_event_stream()` 捕获 GeneratorExit/CancelledError 优雅处理客户端断开；③ 用户可随时中断 AI 生成、补充纠正后继续对话，上下文不丢失；④ 2 个文件改动，193 测试全部通过 | ✅ |
 | 2026-08-01 | Phase 12-续：打断后上下文丢失修复——① SSE 流开始时预存用户消息到 MySQL（防止打断后历史缺失）；② `_post_chat_save` 新增 `skip_user_message` 防止重复保存；③ trip_planner 新增 `_extract_from_history()` 从历史消息 regex 提取需求字段（date/pax/budget），打断后无需重复提供；④ Chrome DevTools E2E 验证通过；⑤ 2 文件改动，193 测试全部通过 | ✅ |
 | 2026-08-01 | Phase 13：智能客服功能——① 前端左下角模式切换下拉框（🗺️ 行程定制 / 🤖 智能客服），智能客服空状态含 6 个快捷 FAQ 标签；② 后端 `force_branch` 跳过意图路由直连 customer_service；③ 在线：search_faq (Milvus→关键词→英文模糊) 自动回复；④ 离线：check_handoff→human_handoff 生成紧急交接单；⑤ 5 个文件改动，agents/tools/prompts/graph/builder 零改动，193 测试全部通过；⑥ Chrome DevTools E2E 验证通过 | ✅ |
+| 2026-08-02 | Phase 15：Token 过期修复——① 前端 api() 全局拦截 401/403 → 自动清除过期 token + 跳转登录页（Auth._forceLogout()），解决 Auth.init() 不验证 token 有效性导致主界面看到但操作失败的 Bug；② .env / .env.example 补齐 JWT_SECRET_KEY 和记忆系统 9 个缺失配置项；③ progress.md + README.md 补全完整启动流程（Docker/本地开发）+ 8 个常见问题排查 | ✅ |
+| 2026-08-02 | Phase 16：前端模式选择器补齐销售/运营 Agent——① 后端 api/schemas.py mode 字段文档 + api/main.py force_branch 映射扩展至全部 4 种模式；② 前端下拉框新增 💰 销售咨询 + 📋 运营处理；③ 各模式独立空状态页 + 快捷标签；④ CSS 新增 mode-sales/mode-operations 徽章样式；⑤ **Bug 修复**：SSE 流式端点 `stream_mode="updates"` 只返回最后节点部分输出导致 `current_branch` 为 null → 改用 `aget_state()` 从 checkpoint 拉取完整 State；⑥ **Markdown 渲染重构**：从块级分类改为逐行扫描引擎——修复列表内 `**粗体**` 不渲染、标题与列表同块时列表被跳过、单换行列表项无法识别三个核心 Bug，新增有序列表 + 引用块支持 | ✅ |
 
