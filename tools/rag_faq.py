@@ -1,9 +1,17 @@
-"""RAG FAQ 搜索工具——Milvus 向量检索 + 关键词兜底
+"""RAG FAQ 搜索工具——双路检索 + RRF 融合
 
-三层回退策略：
-1. Milvus 向量语义搜索（主路径，text-embedding-v4）
-2. 关键词匹配（兜底，Milvus 不可用时）
-3. 通用回退消息（最终兜底）
+在线检索流程：
+    用户问题 → 向量化 → 双路并行检索
+        ├── Path A: Milvus/JSON 向量语义检索（余弦相似度）
+        └── Path B: BM25 关键词检索（中英文混合分词）
+    → RRF 倒数排名融合 → Top-K → 返回格式化的知识库内容
+
+离线入库流程保持不变：scripts/ingest_knowledge.py 摄入到 Milvus/JSON。
+
+三层回退策略（仅在所有检索路径都失败时触发）：
+    1. 双路 + RRF 融合（主路径）
+    2. 关键词兜底匹配（Milvus + BM25 均不可用）
+    3. 通用回退消息
 
 使用方式：
     from tools.rag_faq import search_faq
@@ -16,7 +24,7 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# 关键词兜底库（Milvus 不可用时的 fallback）
+# 关键词兜底库（所有检索路径都不可用时的 fallback）
 # =============================================================================
 
 _FALLBACK_FAQ: dict[str, str] = {
@@ -102,7 +110,10 @@ _FALLBACK_FAQ: dict[str, str] = {
 def search_faq(query: str) -> str:
     """搜索 FAQ 知识库回答用户关于旅游（签证、支付、天气、安全等）的常见问题。
 
-    优先使用 Milvus 向量语义检索，不可用时回退到关键词匹配。
+    采用双路检索 + RRF 融合策略：
+    1. 向量语义检索（Milvus/JSON 余弦相似度）
+    2. BM25 关键词检索
+    3. RRF 倒数排名融合 → Top-K
 
     Args:
         query: 用户的中文问题
@@ -113,25 +124,21 @@ def search_faq(query: str) -> str:
     if not query or not query.strip():
         return "请提供您想了解的具体问题，例如：签证需要什么材料？"
 
-    # ---- Step 1: 尝试 Milvus 向量检索 ----
-    try:
-        from services.vector_store import search_knowledge, get_collection_stats
+    # =========================================================================
+    # 主路径：双路检索 + RRF 融合
+    # =========================================================================
+    fused = _dual_path_search(query, top_k=5)
 
-        stats = get_collection_stats()
-        if stats.get("count", 0) > 0:
-            results = search_knowledge(query, top_k=3, score_threshold=0.3)
+    # 检查融合结果质量：最佳 RRF 得分需 >= 阈值，否则视为无匹配
+    _MIN_RRF_SCORE = 0.015  # RRF 得分最低阈值（低于此值视为噪音）
+    if fused and fused[0].get("score", 0) >= _MIN_RRF_SCORE:
+        return _format_results(fused, query)
 
-            if results:
-                lines = []
-                for r in results:
-                    category = r.get("metadata", {}).get("category", "")
-                    header = f"【{category}】" if category else ""
-                    lines.append(f"{header}\n{r['content']}")
-                return "\n\n---\n\n".join(lines)
-    except Exception as e:
-        logger.warning(f"Milvus search unavailable, falling back to keywords: {e}")
+    # 融合结果质量不足 → 进入兜底
 
-    # ---- Step 2: 关键词兜底匹配 ----
+    # =========================================================================
+    # 兜底路径：关键词匹配
+    # =========================================================================
     for keyword, answer in _FALLBACK_FAQ.items():
         if keyword in query:
             return answer
@@ -149,7 +156,9 @@ def search_faq(query: str) -> str:
         if en_key in query_lower:
             return _FALLBACK_FAQ.get(cn_key, "")
 
-    # ---- Step 3: 通用兜底 ----
+    # =========================================================================
+    # 最终兜底
+    # =========================================================================
     return (
         "感谢您的咨询！这个问题我需要更多信息才能准确回答。\n\n"
         "您可以尝试以下方式：\n"
@@ -157,3 +166,130 @@ def search_faq(query: str) -> str:
         "2. 输入「人工」转接人工客服\n"
         "3. 常见问题类别：签证、支付、退改、天气、交通、网络、美食、安全、语言、健康"
     )
+
+
+# =============================================================================
+# 双路检索核心逻辑
+# =============================================================================
+
+
+def _dual_path_search(query: str, top_k: int = 5) -> list[dict]:
+    """执行双路检索 + RRF 融合。
+
+    Path A: Milvus/JSON 向量语义检索
+    Path B: BM25 关键词检索
+    两路并行，结果经 RRF 融合后返回 Top-K。
+
+    Args:
+        query:  用户查询
+        top_k:  返回结果数
+
+    Returns:
+        RRF 融合后的 Top-K 文档列表，或空列表
+    """
+    vector_results: list[dict] = []
+    bm25_results: list[dict] = []
+
+    # ---- Path A: 向量检索 ----
+    try:
+        from services.vector_store import search_knowledge
+        vector_results = search_knowledge(query, top_k=top_k * 2, score_threshold=0.3)
+        for r in vector_results:
+            r["source"] = "vector"
+    except Exception as e:
+        logger.warning("Vector search unavailable: %s", e)
+
+    # ---- Path B: BM25 关键词检索 ----
+    try:
+        from tools.bm25_retriever import get_bm25_retriever
+        bm25 = get_bm25_retriever()
+        if bm25.doc_count > 0:
+            raw_bm25 = bm25.search(query, top_k=top_k * 2)
+            # 自适应阈值：按查询 token 数归一化，过滤弱匹配噪音
+            from tools.bm25_retriever import tokenize
+            qt_count = max(len(tokenize(query)), 1)
+            _BM25_MIN_PER_TOKEN = 0.5  # 每个 token 的最低 BM25 贡献
+            bm25_results = [
+                r for r in raw_bm25
+                if r.get("score", 0) / qt_count >= _BM25_MIN_PER_TOKEN
+            ]
+    except Exception as e:
+        logger.warning("BM25 search unavailable: %s", e)
+
+    # ---- 如果两路都不可用，返回空 ----
+    if not vector_results and not bm25_results:
+        return []
+
+    # ---- 如果只有一路有结果，直接返回该路 ----
+    if vector_results and not bm25_results:
+        return vector_results[:top_k]
+    if bm25_results and not vector_results:
+        return bm25_results[:top_k]
+
+    # ---- RRF 融合 ----
+    try:
+        from tools.rrf_fusion import rrf_fuse_from_results
+        fused = rrf_fuse_from_results(vector_results, bm25_results, top_k=top_k)
+        if fused:
+            logger.info(
+                "RRF fused: vector=%d + bm25=%d → top-%d (sources=%s)",
+                len(vector_results), len(bm25_results), len(fused),
+                fused[0].get("sources", []) if fused else [],
+            )
+        return fused
+    except Exception as e:
+        logger.warning("RRF fusion failed, falling back to vector results: %s", e)
+        return vector_results[:top_k]
+
+
+# =============================================================================
+# 结果格式化
+# =============================================================================
+
+
+def _format_results(results: list[dict], query: str) -> str:
+    """将检索结果格式化为 LLM 可用的上下文文本。
+
+    包含：
+    - 每条结果的 category 标题
+    - 内容原文
+    - 来源标记（vector / bm25 / vector+bm25）
+
+    Args:
+        results: RRF 融合后的文档列表
+        query:   原始用户问题（保留以便后续 prompt 使用）
+
+    Returns:
+        带格式的 Markdown 文本
+    """
+    lines: list[str] = []
+    for i, r in enumerate(results, 1):
+        meta = r.get("metadata", {})
+        category = meta.get("category", "")
+        city = meta.get("city", "")
+        sources = r.get("sources", [])
+
+        # 标题行：序号 + 分类 + 来源
+        header_parts = [f"### 📄 参考资料 {i}"]
+        if category:
+            header_parts.append(f"【{category}】")
+        if city:
+            header_parts.append(f"({city})")
+        if sources:
+            source_str = "+".join(sources)
+            header_parts.append(f"`[{source_str}]`")
+        lines.append(" ".join(header_parts))
+
+        # 内容
+        content = r.get("content", "")
+        lines.append(content)
+        lines.append("")  # 空行分隔
+
+    # 底部提示
+    lines.append("---")
+    lines.append(
+        "*以上内容来自平台知识库，请基于这些信息组织回答。"
+        "如果知识库内容不足以完全回答用户问题，请诚实地说明，不要编造信息。*"
+    )
+
+    return "\n".join(lines)

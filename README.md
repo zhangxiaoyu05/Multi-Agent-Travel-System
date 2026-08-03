@@ -33,7 +33,7 @@
 >
 > 🛑 **用户可打断**：AI 生成过程中支持随时中断（红色停止按钮），前端 AbortController + SSE 流中断 + 后端优雅处理，用户可补充纠正后继续对话。
 >
-> 🤖 **智能客服模式**：左下角模式下拉框可切换"行程定制 / 智能客服"。智能客服走在线（FAQ 知识库自动应答）/离线（转人工工单）流程，检索签证/支付/退改/交通等 11 大类 QA 对。
+> 🤖 **智能客服模式**：左下角模式下拉框可切换"行程定制 / 智能客服 / 销售咨询 / 运营处理"。智能客服采用双路 RAG 检索管道——向量语义检索（Milvus 余弦相似度）+ BM25 关键词检索（中英文混合分词）→ RRF 倒数排名融合 → Top-K 注入 Prompt → LLM 生成回答，检索签证/支付/退改/交通等 30 篇知识库文档。
 >
 > 🌐 **多语言支持**：左下角语言下拉框支持 5 种语言（中文/English/हिन्दी/Español/العربية），选择后 AI 以目标语言回复——语言指令注入所有 Agent system prompt（qwen 原生多语言能力）。
 >
@@ -98,8 +98,10 @@ Multi_Agent/
 │   ├── sales_agent.py
 │   └── operations_agent.py
 ├── tools/                 # LangChain Tools
-│   ├── rag_faq.py         # RAG FAQ（Milvus 向量检索 + 关键词兜底）
+│   ├── rag_faq.py         # RAG FAQ（双路检索：向量 + BM25 → RRF 融合）
 │   ├── mock_handoff.py    # 转人工评估
+│   ├── bm25_retriever.py   # 🆕 BM25 关键词检索（中英文混合分词 + 30 篇索引）
+│   ├── rrf_fusion.py       # 🆕 RRF 倒数排名融合（k=60 + content hash 去重）
 │   ├── mock_weather.py    # 天气查询（12 城市 Mock + Open-Meteo 真实 API）
 │   ├── weather_real.py    # 真实天气（Open-Meteo 免费 API，45 城市）
 │   ├── mock_calendar.py   # 节假日 / 人流量（真实星期计算 + 内置节假日）
@@ -416,6 +418,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 14 | UI 全局重设计——Skyline 天蓝旅行主题（浅色侧边栏 + 统一色系） | ✅ |
 | Phase 15 | Token 过期修复 + 环境变量补齐 + 启动流程文档完善 | ✅ |
 | Phase 16 | 前端模式选择器补齐销售/运营 Agent——4 Agent 完整可手动切换 | ✅ |
+| Phase 17 | 客服 RAG 管道重设计——双路检索（向量 + BM25）→ RRF 倒数排名融合 → Top-K → Prompt 注入 | ✅ |
 
 ## 许可证
 

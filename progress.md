@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-02（Phase 16 销售/运营 Agent 前端补齐 + Markdown 渲染重构）
+> 最后更新：2026-08-03（Phase 17 客服 RAG 管道重设计——双路检索 + RRF 融合）
 
 ---
 
@@ -825,6 +825,70 @@ python -m pytest tests/ -v
 
 ---
 
+### Phase 17 ✅ 客服 RAG 管道重设计——双路检索 + RRF 融合（2026-08-03）
+
+#### 背景
+
+Phase 7 引入的客服 RAG 检索为单路 Milvus 向量检索，LLM 可选调用 `search_faq` 工具。检索质量依赖单一的余弦相似度排序，存在两个核心缺陷：
+
+1. **缺召回路径**：仅有向量语义检索，缺少 BM25 关键词检索，精确关键词匹配被稀释
+2. **无多路融合**：向量检索失败时的回退是简单的子串匹配（`if keyword in query`），粗糙且不稳定
+
+#### 新设计（在线流程）
+
+```
+用户问题
+  → 意图识别（intent_router → customer_service）
+    → Agent 主动执行 search_faq(query)
+      ├─ Path A: Milvus/JSON 向量检索（余弦相似度, top_k×2, score≥0.3）
+      └─ Path B: BM25 关键词检索（中英文混合分词, top_k×2, per-token≥0.5）
+    → RRF 倒数排名融合（k=60, top_k=5）
+    → 检索结果注入提示词模板 + 用户原始问题
+    → LLM 生成最终回答
+```
+
+> 离线入库流程不变：`scripts/ingest_knowledge.py` 仍将知识库摄入 Milvus/JSON。
+
+#### 新建文件
+
+| 文件 | 说明 |
+|------|------|
+| `tools/bm25_retriever.py` | 纯 Python BM25 实现（~200 行），零外部依赖。中英文混合分词：英文空格+小写，中文 bigram+unigram。IDF + BM25 公式完整实现，自适应 per-token 阈值过滤噪音。模块级单例从 `scripts/knowledge_base` 加载 30 篇文档构建索引 |
+| `tools/rrf_fusion.py` | RRF 倒数排名融合（~110 行）。公式 `Σ 1/(k+rank_i)`，k=60。content SHA256 去重防止同一文档在两路获得双重权重，保留多源标记（vector/bm25/vector+bm25） |
+
+#### 重写/修改文件
+
+| 文件 | 改动 |
+|------|------|
+| `tools/rag_faq.py` | 完全重写。`search_faq(query)` 新流程：并行调用 `search_knowledge()` + `bm25.search()` → RRF 融合 → Markdown 格式化输出（参考资料 1..N + 分类标题 + 来源标记）。三层回退：双路+RRF（主）→ 关键词兜底 → 通用消息。新增 `_MIN_RRF_SCORE=0.015` 质量阈值 |
+| `agents/customer_service.py` | 检索前置化重构。Agent 不再等 LLM 决策调用 search_faq，而是在 `run()` 中主动执行检索 → 注入 `{{RAG_CONTEXT}}` 占位符到 system prompt → 一并传入用户画像和原始问题 → LLM 生成回答。check_handoff 仍保留为 LLM 可选工具 |
+| `prompts/customer_service.txt` | 新增 `{{RAG_CONTEXT}}` 占位符 + 「回答规范」章节：基于知识库回答、标注不确定性、整合多篇资料、引用来源。移除旧的 tool-calling 流程（search_faq 不再由 LLM 调用） |
+
+#### 测试适配
+
+| 文件 | 改动 |
+|------|------|
+| `tests/test_customer_service.py` | `test_no_match_fallback` 适配新管道——双路+RRF 检索更积极，未匹配查询也会返回最佳可用内容（验证非空 + 包含参考资料/兜底消息） |
+| `tests/test_sales.py` | 已有 Bug 修复：`current_branch` 断言从 `"sales"` 更正为 `"sales_agent"`（2 处） |
+| `tests/test_operations.py` | 已有 Bug 修复：`current_branch` 断言从 `"operations"` 更正为 `"operations_agent"`（1 处） |
+
+#### 检索质量对比
+
+| 查询 | Before（单路向量） | After（双路+RRF） |
+|------|------|------|
+| "签证需要什么材料？" | 1 条向量结果 + 回退 | 5 条融合结果（签证材料 #1 + 签证FAQ #2 + 过境免签 #5） |
+| "北京有什么好玩的景点？" | 依赖 Milvus | 北京城市指南 #1（vector+bm25 双命中） |
+| "怎么用微信支付？" | 依赖 Milvus | 微信绑定指南 #1 + 支付方式 #2（双路命中） |
+| "如何制造一台量子计算机" | 返回通用兜底 | 返回低可信结果（被质量阈值过滤→兜底） |
+
+#### 验证
+
+- 193/193 测试全部通过，零回归
+- `python scripts/ingest_knowledge.py --stats` → 30 篇文档，BM25 索引构建成功
+- 客服模式 E2E：FAQ 问题返回含参考资料的结构化回答，无原始 `**`/`--` 符号
+
+---
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -865,4 +929,5 @@ python -m pytest tests/ -v
 | 2026-08-01 | Phase 13：智能客服功能——① 前端左下角模式切换下拉框（🗺️ 行程定制 / 🤖 智能客服），智能客服空状态含 6 个快捷 FAQ 标签；② 后端 `force_branch` 跳过意图路由直连 customer_service；③ 在线：search_faq (Milvus→关键词→英文模糊) 自动回复；④ 离线：check_handoff→human_handoff 生成紧急交接单；⑤ 5 个文件改动，agents/tools/prompts/graph/builder 零改动，193 测试全部通过；⑥ Chrome DevTools E2E 验证通过 | ✅ |
 | 2026-08-02 | Phase 15：Token 过期修复——① 前端 api() 全局拦截 401/403 → 自动清除过期 token + 跳转登录页（Auth._forceLogout()），解决 Auth.init() 不验证 token 有效性导致主界面看到但操作失败的 Bug；② .env / .env.example 补齐 JWT_SECRET_KEY 和记忆系统 9 个缺失配置项；③ progress.md + README.md 补全完整启动流程（Docker/本地开发）+ 8 个常见问题排查 | ✅ |
 | 2026-08-02 | Phase 16：前端模式选择器补齐销售/运营 Agent——① 后端 api/schemas.py mode 字段文档 + api/main.py force_branch 映射扩展至全部 4 种模式；② 前端下拉框新增 💰 销售咨询 + 📋 运营处理；③ 各模式独立空状态页 + 快捷标签；④ CSS 新增 mode-sales/mode-operations 徽章样式；⑤ **Bug 修复**：SSE 流式端点 `stream_mode="updates"` 只返回最后节点部分输出导致 `current_branch` 为 null → 改用 `aget_state()` 从 checkpoint 拉取完整 State；⑥ **Markdown 渲染重构**：从块级分类改为逐行扫描引擎——修复列表内 `**粗体**` 不渲染、标题与列表同块时列表被跳过、单换行列表项无法识别三个核心 Bug，新增有序列表 + 引用块支持 | ✅ |
+| 2026-08-03 | Phase 17：客服 RAG 管道重设计——① 新建 `tools/bm25_retriever.py`（纯 Python BM25，中英文混合分词，30 篇文档索引）；② 新建 `tools/rrf_fusion.py`（RRF 倒数排名融合 k=60，content hash 去重）；③ 重写 `tools/rag_faq.py`（双路并行检索→RRF→Top-K→Markdown 格式化）；④ 重写 `agents/customer_service.py`（检索前置化——Agent 主动执行 RAG→注入 prompt→LLM 回答）；⑤ 更新 `prompts/customer_service.txt`（RAG_CONTEXT 占位符+回答规范）；⑥ 测试适配 3 文件（test_customer_service/test_sales/test_operations），193 测试全部通过 | ✅ |
 

@@ -127,7 +127,7 @@ class TestOperationsNode:
         from graph.nodes.operations_agent import operations_agent
         result = await operations_agent(operations_state)
 
-        assert result["current_branch"] == "operations"
+        assert result["current_branch"] == "operations_agent"
 
     @patch("graph.nodes.operations_agent.get_operations_agent")
     async def test_node_escalation(self, mock_get_agent):

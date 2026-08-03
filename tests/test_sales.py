@@ -179,7 +179,7 @@ class TestSalesNode:
 
         assert result["intent_level"] == "high"
         assert result["next_action"] == "accept"
-        assert result["current_branch"] == "sales"
+        assert result["current_branch"] == "sales_agent"
 
     @patch("graph.nodes.sales_agent.get_sales_agent")
     async def test_node_need_human(self, mock_get_agent):
@@ -207,7 +207,7 @@ class TestSalesNode:
         result = await sales_agent(complaint_sales_state)
 
         assert result["need_human"] is True
-        assert result["current_branch"] == "sales"
+        assert result["current_branch"] == "sales_agent"
 
 
 # =============================================================================
