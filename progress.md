@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-03（Phase 17 客服 RAG 管道重设计——双路检索 + RRF 融合）
+> 最后更新：2026-08-03（Phase 18 MCP 标准化 + 全量真实 API 接入——6 个独立 MCP Server）
 
 ---
 
@@ -889,6 +889,103 @@ Phase 7 引入的客服 RAG 检索为单路 Milvus 向量检索，LLM 可选调�
 
 ---
 
+### Phase 18 ✅ MCP 标准化 + 全量真实 API 接入（2026-08-03）
+
+#### 背景
+
+项目此前所有工具（天气/日历/库存/报价/CRM/CAPI）均为 `tools/mock_*.py` 硬编码模拟数据，仅有天气对接了 Open-Meteo 但未标准化调用方式。存在三个核心问题：
+
+1. **工具与 Agent 紧耦合**：Agent 直接 `import` 工具函数，工具崩溃 → Agent 崩溃
+2. **无标准化接口**：每个工具的调用方式、参数格式、返回值不一致，加新工具需改 Agent 代码
+3. **Mock 数据脱离现实**：天气是假的、报价是固定模板、库存无季节性波动
+
+#### 新架构
+
+```
+Agent 调用 tools/mcp_tools.py（LangChain @tool 包装器）
+  ↓
+MCP Client（子进程管理 + 工具发现 + JSON-RPC 通信）
+  │
+  ├─ Weather MCP Server   → Open-Meteo 免费天气 API（48 城市实时预报）
+  ├─ Calendar MCP Server  → chinese-calendar 中国节假日 + 星期 + 人流量
+  ├─ Inventory MCP Server → 48城市×3档酒店×季节性波动系数
+  ├─ Quote MCP Server     → 城市日均价×主题溢价×节奏因子×季节系数
+  ├─ CRM MCP Server       → MySQL 持久化 CRM 记录
+  └─ CAPI MCP Server      → Meta/Google/TikTok 转化事件上报
+```
+
+#### 核心设计
+
+##### 1. 自研 MCP 协议——零外部依赖
+
+- JSON-RPC 2.0 over stdio，150 行 Python 实现
+- Windows UTF-8 编码兼容（`reconfigure(encoding="utf-8")`）
+- 支持 `tools/list`（工具发现）+ `tools/call`（工具调用）
+
+##### 2. 真实 API 数据源
+
+| 工具 | 数据源 | 费用 | 说明 |
+|------|--------|------|------|
+| get_weather | Open-Meteo | 免费 10,000次/天 | 48城市实时预报，含天气代码→中文映射 |
+| query_calendar | chinese-calendar | 免费 | 中国法定节假日/调休自动判断 |
+| query_inventory | 本地计算引擎 | 免费 | 48城市×3档酒店基准价 + 季节波动系数(0.7x-1.7x) |
+| quote_price | 本地计算引擎 | 免费 | 城市日均基准价 × 主题溢价(0-50%) × 节奏因子(0.8x-1.3x) × 季节系数 |
+| update_crm | MySQL 持久化 | 本地 | INSERT ON DUPLICATE KEY UPDATE 幂等写入 |
+| send_capi | 广告平台 API | 按需 | Meta CAPI / Google Ads / TikTok Events（未配置Token时仅本地日志） |
+
+##### 3. 三层降级策略
+
+```
+MCP Server 在线 → 调用真实 API
+  ↓ 离线/超时/崩溃
+Mock 实现回退 → 返回模拟数据（功能不中断）
+  ↓ mock 也失败
+友好错误提示 → "服务暂时不可用，请稍后重试"
+```
+
+- 环境变量 `MCP_FORCE_MOCK=1` 强制使用 mock（测试/离线开发）
+- 测试环境中 MCP Server 未启动，自动降级到 mock，测试无需修改
+
+##### 4. TripPlanner 工具调用并行化
+
+```
+之前: get_weather → query_calendar → query_inventory（串行，3 次阻塞）
+现在: asyncio.gather(get_weather, query_calendar, query_inventory)（并行，1 次网络往返）
+```
+
+预计响应时间节省 50%+。
+
+#### 文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `mcp/__init__.py` | 🆕 | MCP 包 |
+| `mcp/server.py` | 🆕 | JSON-RPC 2.0 over stdio 基类（150行，含装饰器语法糖） |
+| `mcp/servers/weather_server.py` | 🆕 | 天气 MCP Server（封装 weather_real.py） |
+| `mcp/servers/calendar_server.py` | 🆕 | 日历 MCP Server（chinese-calendar + 旅行旺季标注） |
+| `mcp/servers/inventory_server.py` | 🆕 | 库存 MCP Server（48城市×季节系数动态计算） |
+| `mcp/servers/quote_server.py` | 🆕 | 报价 MCP Server（多因子动态定价引擎） |
+| `mcp/servers/crm_server.py` | 🆕 | CRM MCP Server（MySQL 持久化写入） |
+| `mcp/servers/capi_server.py` | 🆕 | CAPI MCP Server（Meta/Google/TikTok 多平台上报） |
+| `services/mcp_client.py` | 🆕 | MCP Client（子进程管理 + 工具发现 + asyncio 通信） |
+| `tools/mcp_tools.py` | 🆕 | MCP → LangChain @tool 包装器（6个工具 + mock 自动回退） |
+| `agents/trip_planner.py` | ✏️ | 改用 MCP 工具 + `asyncio.gather` 并行调用 |
+| `agents/sales_agent.py` | ✏️ | 改用 MCP 报价/库存工具 |
+| `agents/operations_agent.py` | ✏️ | 改用 MCP CRM/CAPI 工具 |
+| `api/main.py` | ✏️ | lifespan 中启停所有 MCP Servers |
+| `tools/weather_real.py` | 🐛 | 修复 `forecast_days` 超 Open-Meteo 限制（max=16）导致 400 错误 |
+| `mcp/server.py` | 🐛 | 修复 Windows 中文输出 GBK 编码乱码（stdout 强制 UTF-8） |
+
+#### 验证
+
+- `echo '{"jsonrpc":"2.0","id":1,"method":"tools/list",...}' | python mcp/servers/weather_server.py` → 返回工具列表正常
+- `python -c "from mcp.servers.weather_server import get_weather; print(get_weather('三亚','2026-08-06'))"` → 返回 Open-Meteo 实时数据（雷暴/25.1°C/94%降水）
+- `python -c "from mcp.servers.calendar_server import query_calendar; print(query_calendar('2026-10-01'))"` → 正确识别国庆节（National Day）
+- `python -c "from mcp.servers.quote_server import quote_price; print(quote_price('北京',5,2,'历史文化','适中','¥'))"` → 返回完整报价单（人均¥4,200，总计¥8,400）
+- 193/193 测试全部通过，零回归
+
+---
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -930,4 +1027,5 @@ Phase 7 引入的客服 RAG 检索为单路 Milvus 向量检索，LLM 可选调�
 | 2026-08-02 | Phase 15：Token 过期修复——① 前端 api() 全局拦截 401/403 → 自动清除过期 token + 跳转登录页（Auth._forceLogout()），解决 Auth.init() 不验证 token 有效性导致主界面看到但操作失败的 Bug；② .env / .env.example 补齐 JWT_SECRET_KEY 和记忆系统 9 个缺失配置项；③ progress.md + README.md 补全完整启动流程（Docker/本地开发）+ 8 个常见问题排查 | ✅ |
 | 2026-08-02 | Phase 16：前端模式选择器补齐销售/运营 Agent——① 后端 api/schemas.py mode 字段文档 + api/main.py force_branch 映射扩展至全部 4 种模式；② 前端下拉框新增 💰 销售咨询 + 📋 运营处理；③ 各模式独立空状态页 + 快捷标签；④ CSS 新增 mode-sales/mode-operations 徽章样式；⑤ **Bug 修复**：SSE 流式端点 `stream_mode="updates"` 只返回最后节点部分输出导致 `current_branch` 为 null → 改用 `aget_state()` 从 checkpoint 拉取完整 State；⑥ **Markdown 渲染重构**：从块级分类改为逐行扫描引擎——修复列表内 `**粗体**` 不渲染、标题与列表同块时列表被跳过、单换行列表项无法识别三个核心 Bug，新增有序列表 + 引用块支持 | ✅ |
 | 2026-08-03 | Phase 17：客服 RAG 管道重设计——① 新建 `tools/bm25_retriever.py`（纯 Python BM25，中英文混合分词，30 篇文档索引）；② 新建 `tools/rrf_fusion.py`（RRF 倒数排名融合 k=60，content hash 去重）；③ 重写 `tools/rag_faq.py`（双路并行检索→RRF→Top-K→Markdown 格式化）；④ 重写 `agents/customer_service.py`（检索前置化——Agent 主动执行 RAG→注入 prompt→LLM 回答）；⑤ 更新 `prompts/customer_service.txt`（RAG_CONTEXT 占位符+回答规范）；⑥ 测试适配 3 文件（test_customer_service/test_sales/test_operations），193 测试全部通过 | ✅ |
+| 2026-08-03 | Phase 18：MCP 标准化 + 全量真实 API 接入——① 自研轻量 MCP 协议（JSON-RPC 2.0 over stdio，Windows UTF-8 兼容），6 个独立 MCP Server 子进程（weather/calendar/inventory/quote/crm/capi）；② 真实 API 数据源：Open-Meteo 免费天气（48城市）、chinese-calendar 中国节假日、48城市×3档酒店×季节性波动库存引擎、城市日均价×主题溢价×节奏因子报价引擎、MySQL CRM 记录写入、Meta/Google/TikTok CAPI 转化事件上报；③ MCP Client 子进程管理（自动启动/崩溃重启/工具发现/三层降级：MCP→mock→错误提示）；④ `tools/mcp_tools.py`：MCP → LangChain @tool 透明包装器，Agent 零感知切换；⑤ TripPlanner 工具调用从串行改为 `asyncio.gather` 并行（3→1 个网络往返）；⑥ 4 个 Agent 全部改用 MCP 工具（trip_planner/sales_agent/operations_agent/customer_service 不变）；⑦ lifespan 中启停 MCP Servers；⑧ 修复 weather_real.py forecast_days 超限 400 错误；⑨ 修复 mcp/server.py Windows GBK 编码兼容 | ✅ |
 

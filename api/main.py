@@ -246,6 +246,17 @@ async def lifespan(app: FastAPI):
 
     _cleanup_task = asyncio.create_task(_periodic_cleanup())
 
+    # 🚀 MCP Server 启动
+    try:
+        from services.mcp_client import get_mcp_client
+        mcp = get_mcp_client()
+        await mcp.start_all()
+        logger.info("MCP servers started: %d/%d",
+                     sum(1 for c in mcp._connections.values() if c.is_running),
+                     len(mcp._connections))
+    except Exception as e:
+        logger.warning("MCP servers 启动失败（工具将回退到 mock）: %s", e)
+
     yield
 
     # ---- 关闭 ----
@@ -253,6 +264,14 @@ async def lifespan(app: FastAPI):
     try:
         await _cleanup_task
     except asyncio.CancelledError:
+        pass
+
+    # 🛑 MCP Server 关闭
+    try:
+        from services.mcp_client import get_mcp_client
+        mcp = get_mcp_client()
+        await mcp.stop_all()
+    except Exception:
         pass
 
     # ---- 关闭 ----
@@ -657,10 +676,12 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             "channel": req.channel,
             "language": req.language,
             "force_branch": {
+                "auto": "",               # 默认：走意图识别自动路由
+                "planner": "trip_planner",
                 "support": "customer_service",
                 "sales": "sales_agent",
                 "operations": "operations_agent",
-            }.get(req.mode, "trip_planner" if req.mode == "planner" else ""),
+            }.get(req.mode, ""),
         }
 
         result = await _graph.ainvoke(
@@ -736,6 +757,7 @@ NODE_LABELS: dict[str, str] = {
     "input_guard": "正在检查输入...",
     "session_context": "正在加载会话...",
     "intent_router": "正在分析意图...",
+    "route_decision": "正在匹配业务专家...",
     "customer_service": "正在查询知识库...",
     "trip_planner": "正在生成行程...",
     "sales_agent": "正在计算报价...",
@@ -785,10 +807,12 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             "channel": req.channel,
             "language": req.language,
             "force_branch": {
+                "auto": "",               # 默认：走意图识别自动路由
+                "planner": "trip_planner",
                 "support": "customer_service",
                 "sales": "sales_agent",
                 "operations": "operations_agent",
-            }.get(req.mode, "trip_planner" if req.mode == "planner" else ""),
+            }.get(req.mode, ""),
         }
 
         final_state = None
@@ -805,69 +829,120 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
             except Exception:
                 pass
 
+            # ── 创建流式桥接队列 ──
+            from services.stream_bridge import create_queue, remove_queue
+            queue = create_queue(req.conversation_id)
             stream_config = {"configurable": {"thread_id": req.conversation_id}}
-            async for event in _graph.astream(
-                initial_state,
-                config=stream_config,
-                stream_mode="updates",
-            ):
-                for node_name, node_output in event.items():
-                    label = NODE_LABELS.get(node_name, f"正在执行 {node_name}...")
-                    yield f"event: node_start\ndata: {json.dumps({'node': node_name, 'label': label}, ensure_ascii=False)}\n\n"
-                    yield f"event: node_complete\ndata: {json.dumps({'node': node_name}, ensure_ascii=False)}\n\n"
 
-            # 构建最终响应（正常完成）——从 LangGraph checkpoint 读取完整 State
-            # stream_mode="updates" 只返回各节点的部分输出，需要用 aget_state 获取全量
-            final_snapshot = await _graph.aget_state(stream_config)
-            final_state = final_snapshot.values if final_snapshot and final_snapshot.values else {}
+            async def _run_graph():
+                """后台任务：执行 LangGraph，将节点事件和最终结果推入队列"""
+                try:
+                    async for event in _graph.astream(
+                        initial_state, config=stream_config, stream_mode="updates",
+                    ):
+                        for node_name, node_output in event.items():
+                            label = NODE_LABELS.get(node_name, "正在处理...")
+                            try:
+                                queue.put_nowait(("node_start", {"node": node_name, "label": label}))
+                                queue.put_nowait(("node_complete", {"node": node_name}))
+                            except asyncio.QueueFull:
+                                pass
 
-            if final_state:
-                draft = final_state.get("draft", {}) or {}
-                draft_resp = None
-                if draft.get("itinerary_md"):
-                    draft_resp = {
-                        "version": draft.get("version", 0),
-                        "itinerary_md": draft["itinerary_md"],
-                        "estimated_cost": draft.get("estimated_cost"),
-                        "weather_summary": draft.get("weather_summary"),
-                    }
+                    # 获取最终 State
+                    final_snapshot = await _graph.aget_state(stream_config)
+                    final_state = final_snapshot.values if final_snapshot and final_snapshot.values else {}
+                    try:
+                        queue.put_nowait(("done", final_state))
+                    except asyncio.QueueFull:
+                        pass
+                except (GeneratorExit, asyncio.CancelledError):
+                    raise
+                except Exception as e:
+                    logger.exception(f"Graph execution failed: {e}")
+                    try:
+                        queue.put_nowait(("error", str(e)))
+                    except asyncio.QueueFull:
+                        pass
 
-                resp = {
-                    "reply": final_state.get("final_reply", ""),
-                    "current_branch": final_state.get("current_branch"),
-                    "draft": draft_resp,
-                    "need_human": final_state.get("need_human", False),
-                    "intent_scores": final_state.get("intent_scores"),
-                    "quote": final_state.get("quote"),
-                }
-                yield f"event: done\ndata: {json.dumps(resp, ensure_ascii=False)}\n\n"
+            graph_task = asyncio.create_task(_run_graph())
 
-                # 异步保存消息（用户消息已在流开始时预存，skip_user_message=True）
-                asyncio.create_task(
-                    _post_chat_save(
-                        conversation_id=req.conversation_id,
-                        user_id=user["user_id"],
-                        user_message=req.message,
-                        reply=resp["reply"],
-                        branch=resp.get("current_branch"),
-                        intent_scores=resp.get("intent_scores"),
-                        draft=draft_resp,
-                        quote=resp.get("quote"),
-                        need_human=resp.get("need_human"),
-                        all_messages=[],
-                        skip_user_message=True,
-                    )
-                )
-            else:
-                yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
+            # ── 主循环：从队列读取事件 → SSE 输出 ──
+            try:
+                while True:
+                    try:
+                        event_type, data = await asyncio.wait_for(queue.get(), timeout=300.0)
+                    except asyncio.TimeoutError:
+                        yield f"event: error\ndata: {json.dumps({'message': '请求超时，请重试'}, ensure_ascii=False)}\n\n"
+                        break
+
+                    if event_type == "node_start":
+                        yield f"event: node_start\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    elif event_type == "node_complete":
+                        yield f"event: node_complete\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    elif event_type == "token":
+                        yield f"event: token\ndata: {json.dumps({'content': data}, ensure_ascii=False)}\n\n"
+
+                    elif event_type == "done":
+                        final_state = data
+                        if final_state:
+                            draft = final_state.get("draft", {}) or {}
+                            draft_resp = None
+                            if draft.get("itinerary_md"):
+                                draft_resp = {
+                                    "version": draft.get("version", 0),
+                                    "itinerary_md": draft["itinerary_md"],
+                                    "estimated_cost": draft.get("estimated_cost"),
+                                    "weather_summary": draft.get("weather_summary"),
+                                }
+                            resp = {
+                                "reply": final_state.get("final_reply", ""),
+                                "current_branch": final_state.get("current_branch"),
+                                "draft": draft_resp,
+                                "need_human": final_state.get("need_human", False),
+                                "intent_scores": final_state.get("intent_scores"),
+                                "quote": final_state.get("quote"),
+                            }
+                            yield f"event: done\ndata: {json.dumps(resp, ensure_ascii=False)}\n\n"
+
+                            asyncio.create_task(
+                                _post_chat_save(
+                                    conversation_id=req.conversation_id,
+                                    user_id=user["user_id"],
+                                    user_message=req.message,
+                                    reply=resp["reply"],
+                                    branch=resp.get("current_branch"),
+                                    intent_scores=resp.get("intent_scores"),
+                                    draft=draft_resp,
+                                    quote=resp.get("quote"),
+                                    need_human=resp.get("need_human"),
+                                    all_messages=[],
+                                    skip_user_message=True,
+                                )
+                            )
+                        else:
+                            yield f"event: error\ndata: {json.dumps({'message': '处理完成但无结果'}, ensure_ascii=False)}\n\n"
+                        break
+
+                    elif event_type == "error":
+                        yield f"event: error\ndata: {json.dumps({'message': data}, ensure_ascii=False)}\n\n"
+                        break
+            finally:
+                # 清理：取消后台任务 + 移除队列
+                graph_task.cancel()
+                try:
+                    await graph_task
+                except (asyncio.CancelledError, GeneratorExit):
+                    pass
+                remove_queue(req.conversation_id)
 
         except (GeneratorExit, asyncio.CancelledError):
-            # 🛑 用户主动中断——用户消息已在流开始时预存到 MySQL
             logger.info(f"用户中断 SSE 流 (conversation={req.conversation_id})")
+            remove_queue(req.conversation_id)
             raise
 
         except Exception as e:
             logger.exception(f"SSE 流式处理失败: {e}")
+            remove_queue(req.conversation_id)
             yield f"event: error\ndata: {json.dumps({'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

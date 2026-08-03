@@ -6,8 +6,7 @@
 
 from agents.base import BaseAgent
 from graph.state import AgentState
-from tools.mock_quote import quote_price
-from tools.mock_inventory import query_inventory
+from tools.mcp_tools import quote_price, query_inventory
 from services.llm import get_agent_llm
 from prompts import load_prompt
 
@@ -39,6 +38,7 @@ class SalesAgent(BaseAgent):
         # 标准 tool-calling 循环
         loop_result = await self._run_tool_calling_loop(
             user_msg, language=language, extra_context=extra_context,
+            session_id=state.get("session_id", ""),
         )
         final_text = loop_result["final_text"]
         need_human = loop_result["need_human"]

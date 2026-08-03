@@ -16,7 +16,7 @@ class ChatRequest(BaseModel):
         default="web", description="消息渠道"
     )
     language: str = Field(default="zh", description="语言偏好")
-    mode: str = Field(default="planner", description="planner=行程定制, support=智能客服, sales=销售咨询, operations=运营处理")
+    mode: str = Field(default="auto", description="auto=默认智能路由, planner=行程定制, support=智能客服, sales=销售咨询, operations=运营处理")
 
 
 class TripDraftResponse(BaseModel):

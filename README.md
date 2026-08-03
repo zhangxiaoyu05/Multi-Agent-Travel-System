@@ -33,7 +33,9 @@
 >
 > 🛑 **用户可打断**：AI 生成过程中支持随时中断（红色停止按钮），前端 AbortController + SSE 流中断 + 后端优雅处理，用户可补充纠正后继续对话。
 >
-> 🤖 **智能客服模式**：左下角模式下拉框可切换"行程定制 / 智能客服 / 销售咨询 / 运营处理"。智能客服采用双路 RAG 检索管道——向量语义检索（Milvus 余弦相似度）+ BM25 关键词检索（中英文混合分词）→ RRF 倒数排名融合 → Top-K 注入 Prompt → LLM 生成回答，检索签证/支付/退改/交通等 30 篇知识库文档。
+> 🤖 **智能客服模式**：左下角模式下拉框可切换"默认（智能路由）/ 行程定制 / 智能客服 / 销售咨询 / 运营处理"。选择"默认"时自动走意图路由分发到最合适的 Agent；智能客服采用双路 RAG 检索管道——向量语义检索（Milvus 余弦相似度）+ BM25 关键词检索（中英文混合分词）→ RRF 倒数排名融合 → Top-K 注入 Prompt → LLM 生成回答，检索签证/支付/退改/交通等 30 篇知识库文档。
+>
+> 🔌 **MCP 标准化工具层**：6 个独立 MCP Server 子进程（weather/calendar/inventory/quote/crm/capi），自研 JSON-RPC 2.0 over stdio 协议（零外部依赖），Agent 通过 `tools/mcp_tools.py` 透明调用。真实数据源：Open-Meteo 天气（48城市/chinese-calendar 节假日/动态定价引擎/MySQL CRM），MCP 离线时自动降级到 mock 实现。TripPlanner 工具调用从串行改为 `asyncio.gather` 并行（响应时间预计节省 50%+）。
 >
 > 🌐 **多语言支持**：左下角语言下拉框支持 5 种语言（中文/English/हिन्दी/Español/العربية），选择后 AI 以目标语言回复——语言指令注入所有 Agent system prompt（qwen 原生多语言能力）。
 >
@@ -59,7 +61,7 @@
 | Python | 3.12 | |
 | 容器化 | Docker + docker-compose | 一键部署 |
 
-**环境变量**：`TOOL_MODE=mock` 切换工具后端（mock=模拟数据 / real=真实 API）。当前天气已对接 Open-Meteo 免费 API（无需 API Key）。
+**环境变量**：`TOOL_MODE=mock` 切换工具后端（mock=模拟数据 / real=真实 API）。当前全部 6 个工具已通过 MCP 标准化接入真实数据源：天气（Open-Meteo 免费 API，48城市）、日历（chinese-calendar 中国节假日）、库存（48城市×季节波动引擎）、报价（多因子动态定价）、CRM（MySQL 持久化）、CAPI（Meta/Google/TikTok 转化上报）。MCP Server 离线时自动降级到 mock，服务不中断。
 
 ## 项目结构
 
@@ -97,11 +99,22 @@ Multi_Agent/
 │   ├── trip_planner.py
 │   ├── sales_agent.py
 │   └── operations_agent.py
+├── mcp/                   # 🆕 MCP 标准化工具层（JSON-RPC 2.0 over stdio）
+│   ├── __init__.py
+│   ├── server.py          # MCP Server 基类（150行，零依赖）
+│   └── servers/           # 6 个独立 MCP Server 子进程
+│       ├── weather_server.py    # Open-Meteo 实时天气（48城市）
+│       ├── calendar_server.py   # chinese-calendar 真实节假日 + 人流量
+│       ├── inventory_server.py  # 48城市×季节系数库存引擎
+│       ├── quote_server.py      # 多因子动态报价引擎
+│       ├── crm_server.py        # MySQL CRM 记录写入
+│       └── capi_server.py       # Meta/Google/TikTok 转化上报
 ├── tools/                 # LangChain Tools
+│   ├── mcp_tools.py        # 🆕 MCP → LangChain @tool 包装器（6工具 + mock 自动降级）
 │   ├── rag_faq.py         # RAG FAQ（双路检索：向量 + BM25 → RRF 融合）
 │   ├── mock_handoff.py    # 转人工评估
-│   ├── bm25_retriever.py   # 🆕 BM25 关键词检索（中英文混合分词 + 30 篇索引）
-│   ├── rrf_fusion.py       # 🆕 RRF 倒数排名融合（k=60 + content hash 去重）
+│   ├── bm25_retriever.py   # BM25 关键词检索（中英文混合分词 + 30 篇索引）
+│   ├── rrf_fusion.py       # RRF 倒数排名融合（k=60 + content hash 去重）
 │   ├── mock_weather.py    # 天气查询（12 城市 Mock + Open-Meteo 真实 API）
 │   ├── weather_real.py    # 真实天气（Open-Meteo 免费 API，45 城市）
 │   ├── mock_calendar.py   # 节假日 / 人流量（真实星期计算 + 内置节假日）
@@ -115,7 +128,9 @@ Multi_Agent/
 │   ├── mock_capi.py       # CAPI 转化事件发送
 │   └── capi_real.py       # 真实 CAPI API 骨架
 ├── services/              # 基础设施
-│   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max）
+│   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max，含 astream 流式）
+│   ├── mcp_client.py      # 🆕 MCP Client（子进程管理 + 工具发现 + JSON-RPC 通信）
+│   ├── stream_bridge.py   # 🆕 SSE token 队列桥接（Agent → 前端打字机流式）
 │   ├── memory.py          # 🆕 短/中/长期记忆管理器（消息双写 + Token估算 + 偏好提取 + 画像CRUD）—— Agent 可读
 │   ├── embeddings.py      # Embedding（text-embedding-v4，DashScope 原生 API）
 │   ├── vector_store.py    # 向量存储（Milvus + HNSW 索引）
@@ -419,6 +434,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 15 | Token 过期修复 + 环境变量补齐 + 启动流程文档完善 | ✅ |
 | Phase 16 | 前端模式选择器补齐销售/运营 Agent——4 Agent 完整可手动切换 | ✅ |
 | Phase 17 | 客服 RAG 管道重设计——双路检索（向量 + BM25）→ RRF 倒数排名融合 → Top-K → Prompt 注入 | ✅ |
+| Phase 18 | MCP 标准化 + 全量真实 API 接入——6 个独立 MCP Server（自研 JSON-RPC 2.0 over stdio），真实数据源（Open-Meteo/chinese-calendar/动态定价引擎），三层降级（MCP→mock→错误提示），Agent 零感知切换，TripPlanner 工具并行化 | ✅ |
 
 ## 许可证
 

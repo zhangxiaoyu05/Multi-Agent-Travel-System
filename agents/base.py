@@ -61,18 +61,21 @@ class BaseAgent(ABC):
 
     async def _run_tool_calling_loop(
         self, user_msg: str, language: str = "zh", extra_context: dict | None = None,
+        session_id: str = "",
     ) -> dict:
-        """标准 LLM + Tool 调用循环。
+        """标准 LLM + Tool 调用循环（支持流式输出到前端）。
 
         流程：
             1. LLM 决策（直接回复 or 调用 tools）
             2. 若有 tool_calls → 执行对应的 tool
             3. 将 tool 结果回传给 LLM 生成最终回复
+               （若提供 session_id，最终回复使用流式输出逐 token 推送到前端）
 
         Args:
             user_msg: 用户消息文本
             language: 语言代码（zh/en/ja/ko），用于注入语言指令
             extra_context: 额外上下文，注入到 system prompt 后
+            session_id: 会话 ID。若提供，最终回复将流式推送到前端
 
         Returns:
             {
@@ -84,7 +87,7 @@ class BaseAgent(ABC):
         if not user_msg:
             return {"final_text": "", "need_human": False, "tool_results": {}}
 
-        # Step 1: 首次 LLM 调用（带 tools）
+        # Step 1: 首次 LLM 调用（带 tools，始终非流式——需要完整的 tool_call 结构）
         system_content = self.system_prompt + get_language_instruction(language)
         if extra_context:
             ctx_str = "\n".join(f"{k}: {v}" for k, v in extra_context.items())
@@ -111,7 +114,7 @@ class BaseAgent(ABC):
                 if tool_name == "check_handoff" and "需要转人工" in str(result):
                     need_human = True
 
-        # Step 3: 若有 tool 调用，回传结果生成最终回复
+        # Step 3: 生成最终回复（若 session_id 非空则流式输出）
         if response.tool_calls:
             tool_messages = []
             for tc in response.tool_calls:
@@ -130,19 +133,36 @@ class BaseAgent(ABC):
                     response.to_message_dict(),
                 ] + tool_messages
 
-                final_response = await self.llm.ainvoke(conversation)
+                final_text = await self._stream_final(conversation, session_id)
                 return {
-                    "final_text": final_response.content,
+                    "final_text": final_text,
                     "need_human": need_human,
                     "tool_results": tool_results,
                 }
 
-        # 没有工具调用：直接返回 LLM 回复
+        # 没有工具调用：直接返回 LLM 回复（流式）
+        final_text = response.content
         return {
-            "final_text": response.content,
+            "final_text": final_text,
             "need_human": need_human,
             "tool_results": tool_results,
         }
+
+    async def _stream_final(self, messages: list, session_id: str) -> str:
+        """用流式方式生成最终回复，同时推送到前端。
+
+        若 session_id 为空，退化为普通 ainvoke 调用。
+        """
+        if not session_id:
+            response = await self.llm.ainvoke(messages)
+            return response.content
+
+        from services.stream_bridge import push_token
+        full = ""
+        async for chunk in self.llm.astream(messages):
+            full += chunk
+            push_token(session_id, chunk)
+        return full
 
     def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """执行单个工具调用。

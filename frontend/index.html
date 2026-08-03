@@ -482,6 +482,7 @@
 
     <div class="sidebar-selectors">
       <select id="modeSelect" onchange="App.switchMode(this.value)">
+        <option value="auto">🔄 默认</option>
         <option value="planner">🗺️ 行程定制</option>
         <option value="support">🤖 智能客服</option>
         <option value="sales">💰 销售咨询</option>
@@ -713,7 +714,7 @@ function showConfirm(title, message) {
 // App Mode
 // =============================================================================
 const App = {
-  _mode: 'planner',
+  _mode: 'auto',
   _lang: 'zh',
 
   switchMode(mode) {
@@ -722,6 +723,11 @@ const App = {
     const input = document.getElementById('messageInput');
 
     switch (mode) {
+      case 'auto':
+        statusText.textContent = '🔄 默认 · 智能路由';
+        input.placeholder = '输入你的需求，系统会自动匹配最合适的业务专家...';
+        Chat._showEmpty();
+        break;
       case 'support':
         statusText.textContent = '🤖 智能客服';
         input.placeholder = '输入你遇到的问题，我会从知识库中为你查找答案...';
@@ -738,7 +744,7 @@ const App = {
         Chat._showOperationsEmpty();
         break;
       default:
-        statusText.textContent = 'API 在线';
+        statusText.textContent = '🗺️ 行程定制';
         input.placeholder = '输入你的旅行需求...';
         Chat._showEmpty();
     }

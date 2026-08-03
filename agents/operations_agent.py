@@ -7,8 +7,7 @@
 import json
 from agents.base import BaseAgent
 from graph.state import AgentState
-from tools.mock_crm import update_crm
-from tools.mock_capi import send_capi
+from tools.mcp_tools import update_crm, send_capi
 from services.llm import get_agent_llm
 from prompts import load_prompt
 
@@ -34,7 +33,10 @@ class OperationsAgent(BaseAgent):
             }
 
         # 标准 tool-calling 循环
-        loop_result = await self._run_tool_calling_loop(user_msg, language=language)
+        loop_result = await self._run_tool_calling_loop(
+            user_msg, language=language,
+            session_id=state.get("session_id", ""),
+        )
         final_text = loop_result["final_text"]
         need_human = loop_result["need_human"]
         crm_result = loop_result["tool_results"].get("update_crm", "")

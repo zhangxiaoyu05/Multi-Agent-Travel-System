@@ -12,6 +12,7 @@ from graph.state import AgentState
 from tools.rag_faq import search_faq
 from tools.mock_handoff import check_handoff
 from services.llm import get_agent_llm
+from services.stream_bridge import push_token
 from prompts import load_prompt, get_language_instruction
 
 
@@ -116,8 +117,12 @@ class CustomerServiceAgent(BaseAgent):
                         {"role": "user", "content": user_msg},
                         response.to_message_dict(),
                     ] + tool_messages
-                    final_response = await self.llm.ainvoke(conversation)
-                    final_text = final_response.content
+                    session_id = state.get("session_id", "")
+                    final_text = ""
+                    async for chunk in self.llm.astream(conversation):
+                        final_text += chunk
+                        if session_id:
+                            push_token(session_id, chunk)
 
         # =====================================================================
         # Step 4: 投诉关键词后处理

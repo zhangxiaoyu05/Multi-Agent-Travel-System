@@ -130,6 +130,43 @@ class BailianLLM:
         resp.raise_for_status()
         return self._parse_response(resp.json())
 
+    async def astream(self, messages: list, tools: list | None = None,
+                      tool_choice: dict | None = None):
+        """异步流式调用 LLM，逐 token yield 文本块。
+
+        用于前端打字机效果——每 yield 一个 chunk，前端追加渲染。
+
+        Usage:
+            async for chunk in llm.astream(messages):
+                print(chunk, end="", flush=True)
+        """
+        body = self._build_body(messages, tools, tool_choice)
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+        headers = self._headers()
+
+        # 流式请求需要独立 client（避免长连接复用冲突）
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            async with client.stream("POST", self._url, json=body, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(data_str)
+                            choices = data.get("choices", [])
+                            if choices:
+                                delta = choices[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+
     def bind_tools(self, tools: list) -> "_ToolBoundLLM":
         """返回绑定了工具的调用对象。
 
@@ -243,6 +280,10 @@ class _ToolBoundLLM:
 
     async def ainvoke(self, messages: list) -> LLMResponse:
         return await self._llm.ainvoke(messages, tools=self._tools)
+
+    def astream(self, messages: list):
+        """流式调用，透传 tools"""
+        return self._llm.astream(messages, tools=self._tools)
 
 
 # =============================================================================

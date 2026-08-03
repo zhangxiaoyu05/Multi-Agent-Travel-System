@@ -150,7 +150,7 @@ def fetch_weather(city: str, target_date: str) -> str:
                 "wind_speed_10m_max",
             ],
             "timezone": "Asia/Shanghai",
-            "forecast_days": max(7, days_ahead + 1),
+            "forecast_days": min(16, max(7, days_ahead + 1)),
         }, timeout=10)
         resp.raise_for_status()
         data = resp.json()

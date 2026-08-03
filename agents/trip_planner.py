@@ -10,10 +10,9 @@ import re
 from pydantic import BaseModel, Field
 from agents.base import BaseAgent
 from graph.state import AgentState
-from tools.mock_weather import get_weather
-from tools.mock_calendar import query_calendar
-from tools.mock_inventory import query_inventory
+from tools.mcp_tools import get_weather, query_calendar, query_inventory
 from services.llm import get_agent_llm, get_router_llm
+from services.stream_bridge import push_token
 from prompts import load_prompt, get_language_instruction
 
 
@@ -200,19 +199,22 @@ class TripPlannerAgent(BaseAgent):
             else:
                 return result
 
-        # Step 3: 调用工具（同步，因为 Mock 工具是同步的）
-        weather_info = get_weather.invoke({
-            "city": merged_need["destination"],
-            "date": merged_need["arrival_date"],
-        })
-        calendar_info = query_calendar.invoke({
-            "date": merged_need["arrival_date"],
-        })
-        inventory_info = query_inventory.invoke({
-            "city": merged_need["destination"],
-            "date": merged_need["arrival_date"],
-            "pax": merged_need["pax"],
-        })
+        # Step 3: 并行调用 MCP 工具（三个调用互不依赖）
+        import asyncio as _asyncio
+        weather_info, calendar_info, inventory_info = await _asyncio.gather(
+            get_weather.ainvoke({
+                "city": merged_need["destination"],
+                "date": merged_need["arrival_date"],
+            }),
+            query_calendar.ainvoke({
+                "date": merged_need["arrival_date"],
+            }),
+            query_inventory.ainvoke({
+                "city": merged_need["destination"],
+                "date": merged_need["arrival_date"],
+                "pax": merged_need["pax"],
+            }),
+        )
 
         # Step 4: 异步生成行程草案
         revision_note = ""
@@ -255,10 +257,17 @@ class TripPlannerAgent(BaseAgent):
 
 请生成完整的 Markdown 格式行程草案。
 """
-        response = await self.llm.ainvoke([
+        # Step 4: 流式生成行程草案
+        session_id = state.get("session_id", "")
+        full_content = ""
+        messages = [
             {"role": "system", "content": self.system_prompt + lang_instr},
             {"role": "user", "content": generation_prompt},
-        ])
+        ]
+        async for chunk in self.llm.astream(messages):
+            full_content += chunk
+            if session_id:
+                push_token(session_id, chunk)
 
         # Step 5: 构建草案
         current_draft = state.get("draft", {}) or {}
@@ -268,10 +277,10 @@ class TripPlannerAgent(BaseAgent):
             "need": merged_need,
             "draft": {
                 "version": draft_version,
-                "itinerary_md": response.content,
+                "itinerary_md": full_content,
                 "weather_summary": str(weather_info),
             },
-            "final_reply": response.content,
+            "final_reply": full_content,
             "current_branch": "trip_planner",
         }
 
