@@ -435,6 +435,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 16 | 前端模式选择器补齐销售/运营 Agent——4 Agent 完整可手动切换 | ✅ |
 | Phase 17 | 客服 RAG 管道重设计——双路检索（向量 + BM25）→ RRF 倒数排名融合 → Top-K → Prompt 注入 | ✅ |
 | Phase 18 | MCP 标准化 + 全量真实 API 接入——6 个独立 MCP Server（自研 JSON-RPC 2.0 over stdio），真实数据源（Open-Meteo/chinese-calendar/动态定价引擎），三层降级（MCP→mock→错误提示），Agent 零感知切换，TripPlanner 工具并行化 | ✅ |
+| Phase 18-续 | 流式输出打字机效果——BailianLLM.astream() 逐 token 推送 + stream_bridge 队列桥接 + SSE 端点重构（后台图任务+主循环读队列）；默认智能路由模式——前端 auto/默认 选项 + force_branch="" 触发意图分发；进度标签中文化——NODE_LABELS 补全 route_decision + fallback 去英文 | ✅ |
 
 ## 许可证
 

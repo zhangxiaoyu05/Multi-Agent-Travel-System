@@ -986,6 +986,81 @@ Mock 实现回退 → 返回模拟数据（功能不中断）
 
 ---
 
+### Phase 18-续-1 ⌨️ 流式输出打字机效果（2026-08-03）
+
+#### 背景
+
+此前 SSE 端点只发送节点级进度事件（`node_start`/`node_complete`），LLM 调用使用 `httpx.post()` 阻塞等待完整响应，前端虽然已有 `token` 事件处理器和 `_appendStreamingToken()`，但后端从未发送 `token` 事件——导致用户看到的是长时间"⏳ 正在生成行程..."后一次性显示全部文字，没有打字机效果。
+
+#### 修改
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `services/llm.py` | ✏️ +41行 | 新增 `BailianLLM.astream()`：使用 `httpx.stream()` + `stream: True` → 逐行解析 SSE → `yield` 文本块；同步在 `_ToolBoundLLM` 添加 `astream()` 透传 |
+| `services/stream_bridge.py` | 🆕 115行 | `asyncio.Queue` 桥接模块：`push_token(session_id, chunk)` → Agent 推送 token → SSE 端点消费 → 前端渲染。避免 `api.main` ↔ `agents.*` 循环导入 |
+| `api/main.py` | 🔄 重写 | SSE 端点重构：`asyncio.create_task(_run_graph())` 后台执行 LangGraph + 推送节点事件/结果到队列；主循环 `await queue.get()` 同时读取 node_start/node_complete/token/done/error 事件 |
+| `agents/trip_planner.py` | ✏️ | Step 4 行程生成：`self.llm.astream()` → `push_token(session_id, chunk)` |
+| `agents/base.py` | ✏️ +25行 | 新增 `_stream_final()` 方法；`_run_tool_calling_loop()` 接受 `session_id` 参数（为空则退化为普通 ainvoke） |
+| `agents/customer_service.py` | ✏️ | `check_handoff` 后的二次 LLM 调用改为 `astream()` + `push_token()` |
+| `agents/sales_agent.py` | ✏️ | 传入 `session_id` → 继承 BaseAgent 流式能力 |
+| `agents/operations_agent.py` | ✏️ | 同上 |
+
+#### 工作原理
+
+```
+Agent → self.llm.astream() → yield token chunk
+  → push_token(session_id, chunk) → asyncio.Queue
+  → SSE 主循环 await queue.get() → yield event: token → 前端 _appendStreamingToken()
+```
+
+Agent 在 LLM 的 `await` 点（网络 I/O）之间自然让出控制权，主循环唤醒并发送 token，实现逐字推送。
+
+---
+
+### Phase 18-续-2 🔄 默认智能路由模式（2026-08-03）
+
+#### 背景
+
+此前前端模式下拉框只有 4 个具体 Agent（planner/support/sales/operations），每个都通过 `force_branch` 强制跳过意图路由。缺少"让系统自动判断"的选项。
+
+#### 修改
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `frontend/index.html` | ✏️ | 新增 `<option value="auto">🔄 默认</option>` 置顶；`App._mode` 默认值 `'planner'` → `'auto'`；`switchMode()` 新增 `auto` case：显示"🔄 默认 · 智能路由"，引导语"系统会自动匹配最合适的业务专家" |
+| `api/main.py` | ✏️ | `force_branch` 映射重构：新增 `"auto": ""`（空字符串触发意图路由）、`"planner": "trip_planner"` 显式写入，消除隐式三元表达式 |
+| `api/schemas.py` | ✏️ | `mode` 字段默认值 `"planner"` → `"auto"`，描述更新 |
+
+#### 路由逻辑
+
+```
+前端选 "默认" (auto) → force_branch = "" → route_decision_node 跳过 force 分支
+                                              ↓
+                              意图分数路由（惯性偏向 + 最高分 → 目标 Agent）
+
+前端选具体 Agent       → force_branch = "xxx_agent" → 跳过意图识别，直接锁定该 Agent
+```
+
+`graph/conditions/route_decision.py` **零改动**——当 `force_branch` 为空时，已有的意图分数路由逻辑自动接管。
+
+---
+
+### Phase 18-续-3 🏷️ 进度标签中文化（2026-08-03）
+
+#### 背景
+
+SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，走 fallback `f"正在执行 {node_name}..."` 把英文内部名直接暴露给前端——用户看到"正在执行 route_decision..."。
+
+#### 修改
+
+| 位置 | 之前 | 之后 |
+|------|------|------|
+| `NODE_LABELS` 字典 | 缺 `route_decision` | 新增 `"route_decision": "正在匹配业务专家..."` |
+| fallback 逻辑 | `f"正在执行 {node_name}..."` | `"正在处理..."` |
+
+现在所有 12 个图节点都有中文标签，未来新增节点忘了加映射也只显示通用"正在处理..."，不再泄露英文内部名。
+
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -1028,4 +1103,7 @@ Mock 实现回退 → 返回模拟数据（功能不中断）
 | 2026-08-02 | Phase 16：前端模式选择器补齐销售/运营 Agent——① 后端 api/schemas.py mode 字段文档 + api/main.py force_branch 映射扩展至全部 4 种模式；② 前端下拉框新增 💰 销售咨询 + 📋 运营处理；③ 各模式独立空状态页 + 快捷标签；④ CSS 新增 mode-sales/mode-operations 徽章样式；⑤ **Bug 修复**：SSE 流式端点 `stream_mode="updates"` 只返回最后节点部分输出导致 `current_branch` 为 null → 改用 `aget_state()` 从 checkpoint 拉取完整 State；⑥ **Markdown 渲染重构**：从块级分类改为逐行扫描引擎——修复列表内 `**粗体**` 不渲染、标题与列表同块时列表被跳过、单换行列表项无法识别三个核心 Bug，新增有序列表 + 引用块支持 | ✅ |
 | 2026-08-03 | Phase 17：客服 RAG 管道重设计——① 新建 `tools/bm25_retriever.py`（纯 Python BM25，中英文混合分词，30 篇文档索引）；② 新建 `tools/rrf_fusion.py`（RRF 倒数排名融合 k=60，content hash 去重）；③ 重写 `tools/rag_faq.py`（双路并行检索→RRF→Top-K→Markdown 格式化）；④ 重写 `agents/customer_service.py`（检索前置化——Agent 主动执行 RAG→注入 prompt→LLM 回答）；⑤ 更新 `prompts/customer_service.txt`（RAG_CONTEXT 占位符+回答规范）；⑥ 测试适配 3 文件（test_customer_service/test_sales/test_operations），193 测试全部通过 | ✅ |
 | 2026-08-03 | Phase 18：MCP 标准化 + 全量真实 API 接入——① 自研轻量 MCP 协议（JSON-RPC 2.0 over stdio，Windows UTF-8 兼容），6 个独立 MCP Server 子进程（weather/calendar/inventory/quote/crm/capi）；② 真实 API 数据源：Open-Meteo 免费天气（48城市）、chinese-calendar 中国节假日、48城市×3档酒店×季节性波动库存引擎、城市日均价×主题溢价×节奏因子报价引擎、MySQL CRM 记录写入、Meta/Google/TikTok CAPI 转化事件上报；③ MCP Client 子进程管理（自动启动/崩溃重启/工具发现/三层降级：MCP→mock→错误提示）；④ `tools/mcp_tools.py`：MCP → LangChain @tool 透明包装器，Agent 零感知切换；⑤ TripPlanner 工具调用从串行改为 `asyncio.gather` 并行（3→1 个网络往返）；⑥ 4 个 Agent 全部改用 MCP 工具（trip_planner/sales_agent/operations_agent/customer_service 不变）；⑦ lifespan 中启停 MCP Servers；⑧ 修复 weather_real.py forecast_days 超限 400 错误；⑨ 修复 mcp/server.py Windows GBK 编码兼容 | ✅ |
+| 2026-08-03 | Phase 18-续-1：流式输出打字机效果——① 新增 `BailianLLM.astream()`（httpx.stream + stream:True）；② 新建 `services/stream_bridge.py`（asyncio.Queue 桥接 Agent↔SSE）；③ SSE 端点重构（后台图任务 + 主循环读队列→发送 token 事件）；④ 4 个 Agent 全部支持流式（TripPlanner itinerary/CustomerService check_handoff/Sales+Operations BaseAgent）；⑤ 前端已有 token 处理器直接生效 | ✅ |
+| 2026-08-03 | Phase 18-续-2：默认智能路由模式——① 前端新增"🔄 默认"选项置顶（App._mode 默认 auto）；② force_branch 映射重构（auto→""、planner→trip_planner 显式）；③ schema 默认值 planner→auto；④ route_decision 零改动——空 force_branch 自动走意图分发 | ✅ |
+| 2026-08-03 | Phase 18-续-3：进度标签中文化——① NODE_LABELS 补全 route_decision="正在匹配业务专家..."；② fallback 从 `f"正在执行 {node_name}..."` 改为通用"正在处理..."，不再泄露英文内部名 | ✅ |
 
