@@ -110,6 +110,39 @@ def sales_state() -> dict:
 
 
 @pytest.fixture
+def sales_qualified_state() -> dict:
+    """销售 QUALIFIED 阶段状态——已有行程方案"""
+    return {
+        "messages": [HumanMessage(content="这个行程看起来不错，价格怎么样？")],
+        "session_id": "test-sales-q-01",
+        "customer_id": "cust-sales-q-01",
+        "channel": "web",
+        "language": "zh",
+        "need": {
+            "destination": "北京",
+            "days": 3,
+            "arrival_date": "2026-09-01",
+            "pax": 2,
+            "budget": "¥5000/人",
+            "theme": "历史文化",
+            "pace": "适中",
+        },
+        "draft": {
+            "version": 1,
+            "itinerary_md": "## 北京三日游\n\n### Day 1\n故宫-天安门-前门大街\n\n### Day 2\n长城-十三陵\n\n### Day 3\n颐和园-圆明园",
+            "estimated_cost": "¥4800/人",
+            "weather_summary": "晴好，20-28°C",
+        },
+        "intent_scores": {"service": 0.05, "sales": 0.85, "operations": 0.05, "planner": 0.05},
+        "current_branch": "sales",
+        "user_profile": {
+            "nationality": "USA",
+            "budget_range": {"min": 4000, "max": 8000, "currency": "¥"},
+        },
+    }
+
+
+@pytest.fixture
 def operations_state() -> dict:
     """运营咨询场景状态"""
     return {

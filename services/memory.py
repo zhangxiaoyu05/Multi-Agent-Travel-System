@@ -629,6 +629,176 @@ class MemoryManager:
             pass
 
     # =========================================================================
+    # 销售 Pipeline——跟踪用户购买漏斗（Phase 20）
+    # =========================================================================
+
+    async def upsert_pipeline(self, user_id: str, data: dict) -> None:
+        """创建或更新销售 Pipeline 记录（每个 user 最多一条 active）
+
+        若已有 active pipeline，更新；否则插入新记录。
+
+        Args:
+            user_id: 用户 ID
+            data: pipeline 数据 {stage, draft_id, destination, days, pax, budget, ...}
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            # 检查是否已有 active pipeline
+            result = await conn.execute(
+                text("SELECT id, followup_count FROM sales_pipeline WHERE user_id = :uid AND status = 'active' LIMIT 1"),
+                {"uid": user_id},
+            )
+            existing = result.mappings().first()
+
+            if existing:
+                # 更新已有记录
+                set_clauses = ["updated_at = NOW()"]
+                params = {"id": existing["id"]}
+                for key in ("stage", "draft_id", "destination", "days", "pax", "budget",
+                            "discount_offered", "discount_detail"):
+                    if key in data:
+                        set_clauses.append(f"{key} = :{key}")
+                        params[key] = data[key]
+                if set_clauses:
+                    await conn.execute(
+                        text(f"UPDATE sales_pipeline SET {', '.join(set_clauses)} WHERE id = :id"),
+                        params,
+                    )
+            else:
+                # 插入新记录
+                await conn.execute(
+                    text("""
+                        INSERT INTO sales_pipeline
+                            (user_id, draft_id, destination, days, pax, budget, stage, status)
+                        VALUES (:uid, :draft_id, :dest, :days, :pax, :budget, :stage, 'active')
+                    """),
+                    {
+                        "uid": user_id,
+                        "draft_id": data.get("draft_id", ""),
+                        "dest": data.get("destination", ""),
+                        "days": data.get("days"),
+                        "pax": data.get("pax"),
+                        "budget": data.get("budget", ""),
+                        "stage": data.get("stage", "lead"),
+                    },
+                )
+
+    async def get_active_pipeline(self, user_id: str) -> dict | None:
+        """获取用户当前 active 的 pipeline（最多 1 条）
+
+        Returns:
+            pipeline dict 或 None
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT * FROM sales_pipeline
+                    WHERE user_id = :uid AND status = 'active'
+                    ORDER BY updated_at DESC LIMIT 1
+                """),
+                {"uid": user_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+            return self._row_to_pipeline(row)
+
+    async def update_pipeline_stage(self, user_id: str, stage: str) -> None:
+        """更新 active pipeline 的阶段（同时递增 followup_count 如果从外部触发）
+
+        Args:
+            user_id: 用户 ID
+            stage: 新阶段
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE sales_pipeline SET stage = :stage, updated_at = NOW()
+                    WHERE user_id = :uid AND status = 'active'
+                """),
+                {"stage": stage, "uid": user_id},
+            )
+
+    async def increment_followup(self, user_id: str) -> int:
+        """递增跟进计数 + 更新时间
+
+        Returns:
+            当前跟进次数
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE sales_pipeline
+                    SET followup_count = followup_count + 1, updated_at = NOW()
+                    WHERE user_id = :uid AND status = 'active'
+                """),
+                {"uid": user_id},
+            )
+            result = await conn.execute(
+                text("SELECT followup_count FROM sales_pipeline WHERE user_id = :uid AND status = 'active'"),
+                {"uid": user_id},
+            )
+            row = result.mappings().first()
+            return row["followup_count"] if row else 0
+
+    async def mark_pipeline_won(self, user_id: str) -> None:
+        """标记 pipeline 为成交"""
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE sales_pipeline
+                    SET status = 'won', stage = 'won', converted_at = NOW(), updated_at = NOW()
+                    WHERE user_id = :uid AND status = 'active'
+                """),
+                {"uid": user_id},
+            )
+
+    async def mark_pipeline_lost(self, user_id: str) -> None:
+        """标记 pipeline 为流失"""
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE sales_pipeline
+                    SET status = 'lost', stage = 'lost', updated_at = NOW()
+                    WHERE user_id = :uid AND status = 'active'
+                """),
+                {"uid": user_id},
+            )
+
+    def _row_to_pipeline(self, row) -> dict:
+        """将 SQL 行转为 pipeline dict"""
+        pipeline = {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "draft_id": row["draft_id"],
+            "destination": row["destination"],
+            "days": row["days"],
+            "pax": row["pax"],
+            "budget": row["budget"],
+            "stage": row["stage"],
+            "followup_count": row["followup_count"],
+            "discount_offered": bool(row["discount_offered"]),
+            "status": row["status"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else "",
+            "converted_at": row["converted_at"].isoformat() if row["converted_at"] else None,
+        }
+        discount = row["discount_detail"]
+        if discount:
+            try:
+                pipeline["discount_detail"] = json.loads(discount) if isinstance(discount, str) else discount
+            except (json.JSONDecodeError, TypeError):
+                pipeline["discount_detail"] = None
+        else:
+            pipeline["discount_detail"] = None
+        return pipeline
+
+    # =========================================================================
     # 助手方法
     # =========================================================================
 

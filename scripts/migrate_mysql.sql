@@ -193,3 +193,31 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='用户画像——长期记忆，永久保存，可手动编辑或 LLM 建议 + 用户确认';
+
+
+-- =============================================================================
+-- 销售 Pipeline——跟踪用户购买漏斗（Phase 20）
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS sales_pipeline (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id         VARCHAR(64) NOT NULL COMMENT '用户 ID',
+    draft_id        VARCHAR(255) COMMENT '关联的行程方案标识（session_id）',
+    destination     VARCHAR(100) COMMENT '目的地（冗余，方便快速读取）',
+    days            INT COMMENT '行程天数',
+    pax             INT COMMENT '人数',
+    budget          VARCHAR(50) COMMENT '预算',
+    stage           VARCHAR(20) NOT NULL DEFAULT 'lead'
+                    COMMENT 'lead/qualified/negotiation/closing/won/lost',
+    followup_count  INT NOT NULL DEFAULT 0 COMMENT '已跟进次数',
+    discount_offered BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否已发放优惠',
+    discount_detail JSON COMMENT '优惠详情 {type, amount, items}',
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    converted_at    TIMESTAMP COMMENT '成交时间（WON 时设置）',
+    status          VARCHAR(10) NOT NULL DEFAULT 'active' COMMENT 'active/won/lost',
+    INDEX idx_user (user_id),
+    INDEX idx_status (status),
+    INDEX idx_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='销售 Pipeline——跟踪每个用户的购买漏斗阶段';

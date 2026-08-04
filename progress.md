@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-04（Phase 19 查询改写 + 模型分层——成本优化 ~90%）
+> 最后更新：2026-08-04（Phase 20 销售 Agent 重设计——Pipeline 状态机 + 分阶段销售 + 跟进策略）
 
 ---
 
@@ -1142,6 +1142,93 @@ SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，�
 LIGHT_MODEL=qwen-plus   # 想把轻量级任务也升到中档模型
 ```
 
+### Phase 20 🛒 销售 Agent 重设计——Pipeline 状态机 + 分阶段销售 + 跟进策略（2026-08-04）
+
+#### 背景
+
+旧销售 Agent 是一个带假报价工具的聊天机器人：LLM 可选调用 `quote_price`/`query_inventory`（mock），然后用关键词 if-else 打分判定意向等级。它完全不利用已有的行程方案数据（`draft`/`need`），没有销售 Pipeline 概念，没有跟进能力，没有下单支付链路。
+
+#### 新设计
+
+**Pipeline 五阶段模型**：
+
+```
+LEAD ──→ QUALIFIED ──→ NEGOTIATION ──→ CLOSING ──→ WON
+  │         │   │          │              │           │
+  │         │   └── 3d ──→ 优惠           │           │
+  │         │   └── 7d ──→ LOST           │           │
+  └─────────┴─────────────────────────────┴───────────┘
+```
+
+| 阶段 | 用户状态 | 销售策略 |
+|---|---|---|
+| LEAD | 有购买意向但无行程方案 | 引导先去 trip_planner 设计行程 |
+| QUALIFIED | 已有行程方案，在考虑 | 回顾行程亮点 + 挖掘顾虑 |
+| NEGOTIATION | 谈价格/调整内容 | 处理异议 + 分项优惠 |
+| CLOSING | 明确要买 | 生成报价 + 创建订单 + 支付链接 |
+| WON | 已支付 | 确认订单 + 后续流程 |
+| LOST | 7 天未转化或明确拒绝 | 留台阶 |
+
+**核心能力**：
+- **分阶段 Prompt**：4 个阶段各自独立的销售话术策略（LEAD/QUALIFIED/NEGOTIATION/CLOSING），动态加载
+- **行程回顾**：SalesAgent 加载 `draft` + `need` → 注入 Prompt，销售能精准引用行程内容
+- **行程修改检测**：用户说"改一下行程"→ `goto_planner=true` → after_sales 路由到 trip_planner → 改完回来继续销售
+- **跟进策略**：24h 温和追问 → 3d 小额优惠（机票/酒店/门票选 1-2 项）→ 7d 自动放弃
+- **激进但不冒犯**：每次回复末尾给提示/选项，主动追问顾虑，但等用户回复
+
+**5 个新销售工具**（Mock）：
+
+| 工具 | 用途 |
+|---|---|
+| `load_trip_draft` | 跨会话加载查看行程方案 |
+| `create_order` | 创建订单记录 |
+| `get_payment_url` | 生成 Mock 支付链接 |
+| `apply_coupon` | 分项优惠券（酒店/机票/门票选 1-2 项） |
+| `check_order_status` | 查询用户订单状态 |
+
+#### 新建文件
+
+| 文件 | 说明 |
+|---|---|
+| `tools/mock_sales.py` | 5 个销售 Mock 工具（~180 行） |
+| `prompts/sales_lead.txt` | LEAD 阶段 Prompt——引导去定制行程 |
+| `prompts/sales_qualified.txt` | QUALIFIED 阶段 Prompt——回顾行程 + 挖掘顾虑 |
+| `prompts/sales_negotiation.txt` | NEGOTIATION 阶段 Prompt——异议处理 + 优惠策略 |
+| `prompts/sales_closing.txt` | CLOSING 阶段 Prompt——报价 + 下单 + 支付 |
+
+#### 修改/重写文件
+
+| 文件 | 变更 |
+|---|---|
+| `agents/sales_agent.py` | **完全重写**（~300 行）。Pipeline 状态机 + 分阶段 Prompt 动态加载 + 跟进消息生成 + 行程修改检测 + 阶段转换判定。删除旧 `_score_intent()` 关键词打分 |
+| `graph/state.py` | 新增 5 个字段：`sales_pipeline_stage`、`sales_context`、`has_unconverted_trip`、`previous_draft_id`、`goto_planner` + 字段所有权表更新 |
+| `graph/conditions/after_sales.py` | 重写。新增 trip_planner 路由：`need_human > goto_planner > won > lost > end` |
+| `graph/nodes/session_context.py` | 新增销售跟进检测：查询 `sales_pipeline` 表 → 24h 未活动设 `has_unconverted_trip=true` → 7d 自动标记 LOST |
+| `graph/nodes/intent_router.py` | `has_unconverted_trip=true` 时给 sales 分数 ×1.5 加权 |
+| `graph/nodes/sales_agent.py` | 适配新返回结构（pipeline_stage + goto_planner + agent_traces） |
+| `graph/builder.py` | after_sales 条件边新增 trip_planner 路由 |
+| `tools/mcp_tools.py` | 注册 5 个新工具（MCP→Mock 降级模式） |
+| `services/memory.py` | 新增 5 个 Pipeline CRUD 方法 + `_row_to_pipeline()` 解析辅助 |
+| `scripts/migrate_mysql.sql` | 新增 `sales_pipeline` 表（跟踪用户购买漏斗阶段） |
+| `tests/test_sales.py` | **完全重写**（43 测试）。工具/Pipeline/跟进/条件边/节点 全覆盖 |
+| `tests/conftest.py` | 新增 `sales_qualified_state` fixture（带 draft 的销售状态） |
+| `prompts/sales_agent.txt` | **删除**——被 4 个分阶段 Prompt 替代 |
+
+#### 图结构变更
+
+```
+after_sales 路由（旧）: human_handoff / operations_sync / end
+after_sales 路由（新）: human_handoff / trip_planner / operations_sync / end
+
+新增路径: sales_agent → trip_planner（用户要修改行程）
+         → trip_planner 改完 → intent_scorer → revision_decision → 可回到 sales
+```
+
+#### 验证
+
+- 215/215 测试全部通过，零回归
+- 43 个销售专项测试：工具（11）+ MCP 注册（5）+ Pipeline 阶段判定（7）+ 行程修改检测（2）+ 跟进策略（4）+ 条件边（8）+ 节点（6）
+
 
 ## 五、操作记录
 
@@ -1190,4 +1277,5 @@ LIGHT_MODEL=qwen-plus   # 想把轻量级任务也升到中档模型
 | 2026-08-03 | Phase 18-续-3：进度标签中文化——① NODE_LABELS 补全 route_decision="正在匹配业务专家..."；② fallback 从 `f"正在执行 {node_name}..."` 改为通用"正在处理..."，不再泄露英文内部名 | ✅ |
 | 2026-08-04 | Phase 19：查询改写节点——① 新建 `graph/nodes/query_rewrite.py` + `prompts/query_rewrite.txt`；② 主干链路插入 `session_context → query_rewrite → intent_router`；③ AgentState 新增 `original_query` 字段；④ 快速跳过机制（短确认+已规范中文免 LLM 调用）；⑤ 验证：拼音"bei jing 3天 2 person" → "北京3天2人行程"，中英混杂 → 中文统一，规范中文不变 | ✅ |
 | 2026-08-04 | Phase 19-续：模型分层成本优化——① 新增 `get_light_llm()` 工厂（qwen-turbo）；② 客服/运营 → qwen-turbo（↓~90%费用）；③ 销售 → qwen-plus；④ 查询改写 → qwen-turbo；⑤ 行程定制保持 qwen3-max；⑥ 所有模型均支持 function calling，Agent 代码零改动；⑦ 193 测试全部通过 | ✅ |
+| 2026-08-04 | Phase 20：销售 Agent 重设计——① Pipeline 五阶段模型（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST）；② 4 个分阶段 Prompt 动态加载；③ 5 个新 Mock 销售工具（load_trip_draft/create_order/get_payment_url/apply_coupon/check_order_status）；④ 跟进策略（24h 温和→3d 优惠→7d 放弃）；⑤ 行程修改检测（goto_planner→trip_planner→回销售）；⑥ 新建 5 文件/重写 2 文件/修改 10 文件/删除 1 文件；⑦ 215 测试全部通过 | ✅ |
 

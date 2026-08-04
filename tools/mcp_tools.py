@@ -195,6 +195,106 @@ def update_crm(customer_id: str, session_data: str) -> str:
 
 
 @tool
+def check_order_status(user_id: str) -> str:
+    """检查用户是否有待支付或已完成的订单。
+
+    用于防止重复下单，也用于跟进时判断用户当前状态。
+
+    Args:
+        user_id: 用户 ID
+
+    Returns:
+        订单状态摘要文本
+    """
+    def _mock(user_id):
+        from tools.mock_sales import check_order_status as mock_status
+        return mock_status.invoke({"user_id": user_id})
+    return _mcp_call("check_order_status", {"user_id": user_id}, _mock)
+
+
+@tool
+def get_payment_url(order_id: str) -> str:
+    """获取订单的支付链接。
+
+    Args:
+        order_id: 订单编号
+
+    Returns:
+        支付链接信息
+    """
+    def _mock(order_id):
+        from tools.mock_sales import get_payment_url as mock_pay
+        return mock_pay.invoke({"order_id": order_id})
+    return _mcp_call("get_payment_url", {"order_id": order_id}, _mock)
+
+
+@tool
+def apply_coupon(user_id: str, draft_id: str, amount: str = "") -> str:
+    """为客户发放优惠券，应用于当前行程方案。
+
+    Args:
+        user_id: 用户 ID
+        draft_id: 关联的行程方案标识
+        amount: 优惠金额描述
+
+    Returns:
+        优惠券详情
+    """
+    def _mock(user_id, draft_id, amount=""):
+        from tools.mock_sales import apply_coupon as mock_cpn
+        return mock_cpn.invoke({"user_id": user_id, "draft_id": draft_id, "amount": amount})
+    return _mcp_call("apply_coupon", {"user_id": user_id, "draft_id": draft_id, "amount": amount}, _mock)
+
+
+@tool
+def load_trip_draft(draft_id: str = "", destination: str = "", days: int = 0,
+                    pax: int = 0, budget: str = "") -> str:
+    """加载或查看用户的行程方案。
+
+    Args:
+        draft_id: 行程方案标识
+        destination: 目的地城市
+        days: 行程天数
+        pax: 出行人数
+        budget: 预算
+
+    Returns:
+        结构化的行程方案文本
+    """
+    def _mock(draft_id="", destination="", days=0, pax=0, budget=""):
+        from tools.mock_sales import load_trip_draft as mock_load
+        return mock_load.invoke({
+            "draft_id": draft_id,
+            "destination": destination,
+            "days": days,
+            "pax": pax,
+            "budget": budget,
+        })
+    return _mcp_call("load_trip_draft", {
+        "draft_id": draft_id, "destination": destination,
+        "days": days, "pax": pax, "budget": budget,
+    }, _mock)
+
+
+@tool
+def create_order(draft_id: str, quote_ref: str = "", notes: str = "") -> str:
+    """创建行程预订订单。
+
+    Args:
+        draft_id: 关联的行程方案标识
+        quote_ref: 报价单引用
+        notes: 订单备注
+
+    Returns:
+        订单创建结果
+    """
+    def _mock(draft_id, quote_ref="", notes=""):
+        from tools.mock_sales import create_order as mock_order
+        return mock_order.invoke({"draft_id": draft_id, "quote_ref": quote_ref, "notes": notes})
+    return _mcp_call("create_order", {"draft_id": draft_id, "quote_ref": quote_ref, "notes": notes}, _mock)
+
+
+@tool
 def send_capi(event_type: str, event_data: str) -> str:
     """上报转化事件到广告平台（Meta/Google/TikTok）。
 

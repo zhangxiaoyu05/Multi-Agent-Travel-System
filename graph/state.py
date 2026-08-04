@@ -17,6 +17,10 @@
 | revision_count | revision_loop | trip_planner, intent_scorer, revision_decision |
 | quote | sales_agent | human_handoff |
 | intent_level/next_action | intent_scorer(定制), sales_agent(销售) | revision_decision, after_sales |
+| sales_pipeline_stage | sales_agent | after_sales, session_context |
+| sales_context | sales_agent | sales_agent（跨会话） |
+| has_unconverted_trip + previous_draft_id | session_context | intent_router, sales_agent |
+| goto_planner | sales_agent | after_sales |
 | need_human + handoff | 需转人工的 Agent | route_decision, human_handoff |
 | final_reply | 各 Agent | API 层 |
 | agent_traces | 所有 Agent（追加） | 调试/监控 |
@@ -131,6 +135,13 @@ class AgentState(MessagesState):
     handoff: HandoffContext   # 🆕 转人工上下文——替代裸 need_human 判断
     intent_level: str         # 意向等级（owner: intent_scorer(定制流) / sales_agent(销售流)）
     next_action: str          # 下一步动作（owner: intent_scorer(定制流) / sales_agent(销售流)）
+
+    # ====== 销售 Pipeline（owner: sales_agent）======
+    sales_pipeline_stage: str  # lead/qualified/negotiation/closing/won/lost
+    sales_context: dict        # {followup_count, discount_offered, last_stage_entered_at, ...}
+    has_unconverted_trip: bool # 是否有未转化的行程方案（session_context 写入）
+    previous_draft_id: str     # 上一份行程方案标识（session_context 写入）
+    goto_planner: bool         # 销售中用户要求修改行程 → 路由到 trip_planner
 
     # ====== 输出 ======
     final_reply: str          # 面向用户的最终回复

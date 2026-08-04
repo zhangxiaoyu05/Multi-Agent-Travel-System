@@ -9,18 +9,21 @@
 ```
 用户消息 → input_guard → session_context → query_rewrite → intent_router → route_decision
                                                                                    │
-        ┌──────────────────┰────────────────────┼──────────────────────────────────┐
-        ▼                  ▼                    ▼                                  ▼
- customer_service      sales_agent         trip_planner                       human_handoff
-  FAQ / 转人工         报价 / 签约         需求采集 / 草案                (人工接管)
-        │                  │             生成 / 修订循环                      │
-        ▼                  ▼                    │                            │
-   human_handoff     operations_sync    ────────┘                            │
-        │                  │                    │                            │
-        └──────────────────╋────────────────────┼────────────────────────────│
-                           ▼                    ▼                            ▼
-                    operations_agent      operations_sync ←──────────────────┘
-                     入驻 / 履约 / 工单   (终态：CRM + CAPI)
+     ┌──────────┰───────────┰──────────────┰────────────────────────────────────────┼──────────────────────┐
+     ▼          ▼           ▼              ▼                                        ▼                      ▼
+customer   sales_agent  operations    trip_planner                           human_handoff
+ service    Pipeline    _agent 运营   需求采集 / 草案生成 /                  (人工接管)
+FAQ / 转人工  5阶段销售   入驻/履约/工单  修订循环                              │
+     │          │           │              │                                    │
+     │    ┌─────┤           │              ├─ goto_planner ──→ trip_planner     │
+     │    │     │           │              │  (Phase 20: 销售中修改行程)        │
+     │    ▼     ▼           ▼              ▼                                    │
+     ├─ human_handoff   operations_sync ←──┤                                    │
+     │        │              │                                                  │
+     └────────╋──────────────┼──────────────────────────────────────────────────│
+              ▼              ▼                                                  ▼
+         operations_sync ←──────────────────────────────────────────────────────┘
+         (终态：CRM + CAPI 写入)
 ```
 
 > 💡 **共享黑板**：所有节点共用 `AgentState`，字段有明确 owner。新增 `handoff`（转人工上下文）、`agent_traces`（追加式审计日志）、`branch_history`（路径追踪）。分支切换时自动重置控制信号防止跨分支污染。
@@ -40,6 +43,8 @@
 > 🔍 **查询改写**：在意图路由前新增 `query_rewrite` 节点——将用户拼音/中英混杂/错别字输入（如"bei jing 3天 2 person"）自动改写为规范中文（"北京3天2人行程"）。快速跳过机制：短确认和已规范中文直接跳过 LLM 调用，零额外成本。显著提升下游意图分类、RAG 检索、字段提取的准确率。
 >
 > 💰 **模型分层成本优化**：三层模型架构——Light（qwen-turbo：客服、运营、查询改写）、Mid（qwen-plus：销售、路由、打分）、Heavy（qwen3-max：行程定制）。客服/运营从最贵模型降至最便宜，每次对话成本降低 ~90%。所有模型均支持 function calling，Agent 代码零改动，环境变量可控。
+>
+> 🛒 **销售 Pipeline 状态机**：五阶段销售漏斗（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST），分阶段 Prompt 动态加载（引导定制→回顾行程→处理异议→促成成交），5 个销售工具（行程加载/报价/下单/支付链接/优惠券）。跟进策略：24h 温和追问 → 3d 小额优惠（机票/酒店/门票选 1-2 项）→ 7d 自动放弃。支持销售中随时跳转 trip_planner 修改行程后回来继续。
 >
 > 🌐 **多语言支持**：左下角语言下拉框支持 5 种语言（中文/English/हिन्दी/Español/العربية），选择后 AI 以目标语言回复——语言指令注入所有 Agent system prompt（qwen 原生多语言能力）。
 >
@@ -132,7 +137,8 @@ Multi_Agent/
 │   ├── mock_crm.py        # CRM 客户记录写入
 │   ├── crm_real.py        # 真实 CRM API 骨架
 │   ├── mock_capi.py       # CAPI 转化事件发送
-│   └── capi_real.py       # 真实 CAPI API 骨架
+│   ├── capi_real.py       # 真实 CAPI API 骨架
+│   └── mock_sales.py      # 🆕 销售工具（下单/支付/优惠/行程加载）
 ├── services/              # 基础设施
 │   ├── llm.py             # LLM 工厂（qwen-turbo + qwen-plus + qwen3-max 三层，含 astream 流式）
 │   ├── mcp_client.py      # 🆕 MCP Client（子进程管理 + 工具发现 + JSON-RPC 通信）
@@ -151,16 +157,19 @@ Multi_Agent/
 ├── frontend/              # 前端页面
 │   ├── index.html         # 聊天界面（仿 DeepSeek 布局 + 登录/多对话）
 │   └── profile.html       # 🆕 用户画像页面（编辑偏好 + AI 建议确认）
-├── prompts/               # System Prompt 模板（8 个）
+├── prompts/               # System Prompt 模板（11 个）
 │   ├── intent_router.txt
 │   ├── customer_service.txt
 │   ├── trip_planner.txt
-│   ├── sales_agent.txt
 │   ├── operations_agent.txt
 │   ├── summary.txt            # 🆕 对话摘要 Prompt
 │   ├── preference_extract.txt # 🆕 偏好提取 Prompt
-│   └── query_rewrite.txt      # 🆕 查询改写 Prompt
-├── tests/                 # 单元测试（193 个用例）
+│   ├── query_rewrite.txt      # 🆕 查询改写 Prompt
+│   ├── sales_lead.txt         # 🆕 销售 LEAD 阶段 Prompt
+│   ├── sales_qualified.txt    # 🆕 销售 QUALIFIED 阶段 Prompt
+│   ├── sales_negotiation.txt  # 🆕 销售 NEGOTIATION 阶段 Prompt
+│   └── sales_closing.txt      # 🆕 销售 CLOSING 阶段 Prompt
+├── tests/                 # 单元测试（215 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
 │   ├── test_graph.py
@@ -357,7 +366,7 @@ event: done            → {完整 ChatResponse}
 ## 测试
 
 ```bash
-# 运行全部 193 个单元测试（~8s，含异步测试 + auth/API/SSE + 记忆系统）
+# 运行全部 215 个单元测试（~12s，含异步测试 + auth/API/SSE + 记忆系统 + Pipeline）
 python -m pytest tests/ -v
 
 # 运行端到端集成测试
@@ -445,6 +454,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 18-续 | 流式输出打字机效果——BailianLLM.astream() 逐 token 推送 + stream_bridge 队列桥接 + SSE 端点重构（后台图任务+主循环读队列）；默认智能路由模式——前端 auto/默认 选项 + force_branch="" 触发意图分发；进度标签中文化——NODE_LABELS 补全 route_decision + fallback 去英文 | ✅ |
 | Phase 19 | 查询改写节点——主干链路插入 query_rewrite（session_context → query_rewrite → intent_router），LLM 纠错规范化（拼音→中文、中英混杂→统一中文、错别字修正），快速跳过机制（短确认+已规范中文免 LLM 调用），改写效果： "bei jing 3天 2 person" → "北京3天2人行程" | ✅ |
 | Phase 19-续 | 模型分层成本优化——三层架构（Light=qwen-turbo/Mid=qwen-plus/Heavy=qwen3-max），客服+运营 → qwen-turbo（↓~90% 费用），销售 → qwen-plus，行程保持 qwen3-max，新增 get_light_llm() 工厂，Agent 代码零改动 | ✅ |
+| Phase 20 | 销售 Agent 重设计——Pipeline 五阶段状态机（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST）+ 4 个分阶段 Prompt 动态加载 + 5 个新 Mock 销售工具 + 跟进策略（24h 温和→3d 优惠→7d 放弃）+ 行程修改检测（goto_planner→trip_planner→回销售）+ 新建 5 文件/重写 2 文件/修改 10 文件/删除 1 文件 | ✅ |
 
 ## 许可证
 

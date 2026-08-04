@@ -160,6 +160,7 @@ def build_graph(checkpointer=None):
         {
             "operations_sync": "operations_sync",
             "human_handoff": "human_handoff",
+            "trip_planner": "trip_planner",   # Phase 20: 销售中修改行程
             "end": END,
         }
     )

@@ -176,6 +176,14 @@ def intent_router(state: AgentState) -> dict:
     # ---- 预过滤器：明确的简单意图跳过 LLM（v3） ----
     prefilter_result = _prefilter_user_message(user_text)
     if prefilter_result is not None:
+        # Phase 20: 即使匹配预过滤器，如果有未转化行程也提高 sales 权重
+        if state.get("has_unconverted_trip"):
+            prefilter_result["intent_scores"]["sales"] = 0.3
+            # 重新归一化
+            total = sum(prefilter_result["intent_scores"].values())
+            if total > 0:
+                for k in prefilter_result["intent_scores"]:
+                    prefilter_result["intent_scores"][k] /= total
         return prefilter_result
 
     # ---- 构建上下文 ----
@@ -216,13 +224,24 @@ def intent_router(state: AgentState) -> dict:
             "summary": f"用户消息被 LLM 判定为需转人工：{result.reasoning[:120]}",
         }
 
+    scores = {
+        "service": result.service,
+        "sales": result.sales,
+        "operations": result.operations,
+        "planner": result.planner,
+    }
+
+    # Phase 20: 有未转化的行程方案时，给 sales 加权
+    if state.get("has_unconverted_trip"):
+        scores["sales"] = scores["sales"] * 1.5
+        # 重新归一化
+        total = sum(scores.values())
+        if total > 0:
+            for k in scores:
+                scores[k] /= total
+
     return {
-        "intent_scores": {
-            "service": result.service,
-            "sales": result.sales,
-            "operations": result.operations,
-            "planner": result.planner,
-        },
+        "intent_scores": scores,
         "need_human": result.need_human,
         "handoff": handoff,
         "agent_traces": [{
