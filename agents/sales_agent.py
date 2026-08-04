@@ -7,7 +7,7 @@
 from agents.base import BaseAgent
 from graph.state import AgentState
 from tools.mcp_tools import quote_price, query_inventory
-from services.llm import get_agent_llm
+from services.llm import get_router_llm
 from prompts import load_prompt
 
 
@@ -15,7 +15,7 @@ class SalesAgent(BaseAgent):
     """销售 Agent——报价 + 库存 + 意向评分"""
 
     def __init__(self):
-        llm = get_agent_llm()
+        llm = get_router_llm()
         tools = [quote_price, query_inventory]
         system_prompt = load_prompt("sales_agent.txt")
         super().__init__(llm=llm, tools=tools, system_prompt=system_prompt)

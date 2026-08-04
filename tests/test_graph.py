@@ -48,6 +48,7 @@ class TestNodeRegistration:
     REQUIRED_NODES = [
         "input_guard",
         "session_context",
+        "query_rewrite",
         "intent_router",
         "customer_service",
         "trip_planner",
@@ -129,7 +130,8 @@ class TestEdgeStructure:
         assert len(out_edges) > 0, "route_decision 应有条件边"
 
     def test_linear_chain_exists(self):
-        """主干链路：input_guard → session_context → intent_router"""
+        """主干链路：input_guard → session_context → query_rewrite → intent_router"""
         edges = self._edge_set()
         assert ("input_guard", "session_context") in edges, "主干链路断裂"
-        assert ("session_context", "intent_router") in edges, "主干链路断裂"
+        assert ("session_context", "query_rewrite") in edges, "主干链路断裂"
+        assert ("query_rewrite", "intent_router") in edges, "主干链路断裂"

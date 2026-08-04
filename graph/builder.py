@@ -10,11 +10,11 @@ Checkpoint 后端：
     CHECKPOINT_BACKEND=mysql（默认）| memory
 
 完整图结构：
-    START → input_guard → session_context → intent_router
-                                                       │
-         ┌────────────┰────────────┰───────────────────┼──────────────────────┐
-         ▼            ▼            ▼                   ▼                      ▼
-  customer_service  sales   operations_agent  trip_planner             human_handoff
+    START → input_guard → session_context → query_rewrite → intent_router
+                                                                       │
+         ┌────────────┰────────────┰───────────────────────────────────┼──────────────────────┐
+         ▼            ▼            ▼                                   ▼                      ▼
+  customer_service  sales   operations_agent                  trip_planner             human_handoff
          │            │            │           │        ▲                       │
          ├─ after_svc ├─ after_sls │           ├─ requirements_complete         │
          │  ├→ handoff│  ├→ ops_sync│           │   ├→ intent_scorer           │
@@ -44,6 +44,7 @@ from graph.state import AgentState
 # Nodes
 from graph.nodes.input_guard import input_guard
 from graph.nodes.session_context import session_context
+from graph.nodes.query_rewrite import query_rewrite
 from graph.nodes.intent_router import intent_router
 from graph.nodes.customer_service import customer_service
 from graph.nodes.trip_planner import trip_planner
@@ -99,6 +100,7 @@ def build_graph(checkpointer=None):
     # ====== 注册节点 ======
     builder.add_node("input_guard", input_guard)
     builder.add_node("session_context", session_context)
+    builder.add_node("query_rewrite", query_rewrite)  # 查询改写：纠错+规范化
     builder.add_node("intent_router", intent_router)
     builder.add_node("route_decision", route_decision_node)  # v3: 拆分路由为节点+条件
 
@@ -123,7 +125,8 @@ def build_graph(checkpointer=None):
     # 主干线
     builder.add_edge(START, "input_guard")
     builder.add_edge("input_guard", "session_context")
-    builder.add_edge("session_context", "intent_router")
+    builder.add_edge("session_context", "query_rewrite")
+    builder.add_edge("query_rewrite", "intent_router")
     builder.add_edge("intent_router", "route_decision")  # v3: 路由节点写 State
 
     # 路由分发（v3: route_condition 从 current_branch 读取，不做计算）

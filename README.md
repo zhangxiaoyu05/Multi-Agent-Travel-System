@@ -7,11 +7,11 @@
 ## 架构概览
 
 ```
-用户消息 → input_guard → session_context → intent_router → route_decision
-                                                                    │
-        ┌──────────────────┰────────────────────┼──────────────────────────┐
-        ▼                  ▼                    ▼                          ▼
- customer_service      sales_agent         trip_planner               human_handoff
+用户消息 → input_guard → session_context → query_rewrite → intent_router → route_decision
+                                                                                   │
+        ┌──────────────────┰────────────────────┼──────────────────────────────────┐
+        ▼                  ▼                    ▼                                  ▼
+ customer_service      sales_agent         trip_planner                       human_handoff
   FAQ / 转人工         报价 / 签约         需求采集 / 草案                (人工接管)
         │                  │             生成 / 修订循环                      │
         ▼                  ▼                    │                            │
@@ -37,6 +37,10 @@
 >
 > 🔌 **MCP 标准化工具层**：6 个独立 MCP Server 子进程（weather/calendar/inventory/quote/crm/capi），自研 JSON-RPC 2.0 over stdio 协议（零外部依赖），Agent 通过 `tools/mcp_tools.py` 透明调用。真实数据源：Open-Meteo 天气（48城市/chinese-calendar 节假日/动态定价引擎/MySQL CRM），MCP 离线时自动降级到 mock 实现。TripPlanner 工具调用从串行改为 `asyncio.gather` 并行（响应时间预计节省 50%+）。
 >
+> 🔍 **查询改写**：在意图路由前新增 `query_rewrite` 节点——将用户拼音/中英混杂/错别字输入（如"bei jing 3天 2 person"）自动改写为规范中文（"北京3天2人行程"）。快速跳过机制：短确认和已规范中文直接跳过 LLM 调用，零额外成本。显著提升下游意图分类、RAG 检索、字段提取的准确率。
+>
+> 💰 **模型分层成本优化**：三层模型架构——Light（qwen-turbo：客服、运营、查询改写）、Mid（qwen-plus：销售、路由、打分）、Heavy（qwen3-max：行程定制）。客服/运营从最贵模型降至最便宜，每次对话成本降低 ~90%。所有模型均支持 function calling，Agent 代码零改动，环境变量可控。
+>
 > 🌐 **多语言支持**：左下角语言下拉框支持 5 种语言（中文/English/हिन्दी/Español/العربية），选择后 AI 以目标语言回复——语言指令注入所有 Agent system prompt（qwen 原生多语言能力）。
 >
 > 🎨 **Skyline 天蓝主题**：全局浅色旅行风格——天蓝主色调 `#0ea5e9`、白色侧边栏、轻灰背景，告别紫色系。
@@ -49,8 +53,9 @@
 | Agent 框架 | LangChain ≥ 0.3 | @tool 装饰器 + Tool 封装 |
 | Web 框架 | FastAPI ≥ 0.115 | 异步 API + 静态文件服务 |
 | LLM 调用 | httpx 直连百炼 | 零 langchain-openai 依赖，支持 async/await |
-| 路由模型 | 百炼 qwen-plus | 意图识别（平衡速度与质量） |
-| 生成模型 | 百炼 qwen3-max | 行程生成、客服回复（强推理） |
+| LLM Light | 百炼 qwen-turbo | 客服、运营、查询改写（最低成本） |
+| LLM Mid | 百炼 qwen-plus | 销售、路由、意图打分（中等推理） |
+| LLM Heavy | 百炼 qwen3-max | 行程定制（复杂长文本生成） |
 | 认证 | JWT (python-jose) + bcrypt | 最简用户名+密码登录 |
 | 前端 | 原生 HTML/CSS/JS（仿 DeepSeek） | 登录/多对话/SSE 流式输出 |
 | 多语言 | zh / en / ja / ko | 中文 + 英文 + 日文 + 韩文 |
@@ -78,6 +83,7 @@ Multi_Agent/
 │   ├── nodes/             # 节点实现（薄层，调用 Agent）
 │   │   ├── input_guard.py
 │   │   ├── session_context.py
+│   │   ├── query_rewrite.py  # 🆕 查询改写：纠错+规范化
 │   │   ├── intent_router.py
 │   │   ├── customer_service.py
 │   │   ├── trip_planner.py
@@ -128,7 +134,7 @@ Multi_Agent/
 │   ├── mock_capi.py       # CAPI 转化事件发送
 │   └── capi_real.py       # 真实 CAPI API 骨架
 ├── services/              # 基础设施
-│   ├── llm.py             # LLM 工厂（qwen-plus + qwen3-max，含 astream 流式）
+│   ├── llm.py             # LLM 工厂（qwen-turbo + qwen-plus + qwen3-max 三层，含 astream 流式）
 │   ├── mcp_client.py      # 🆕 MCP Client（子进程管理 + 工具发现 + JSON-RPC 通信）
 │   ├── stream_bridge.py   # 🆕 SSE token 队列桥接（Agent → 前端打字机流式）
 │   ├── memory.py          # 🆕 短/中/长期记忆管理器（消息双写 + Token估算 + 偏好提取 + 画像CRUD）—— Agent 可读
@@ -145,14 +151,15 @@ Multi_Agent/
 ├── frontend/              # 前端页面
 │   ├── index.html         # 聊天界面（仿 DeepSeek 布局 + 登录/多对话）
 │   └── profile.html       # 🆕 用户画像页面（编辑偏好 + AI 建议确认）
-├── prompts/               # System Prompt 模板（7 个）
+├── prompts/               # System Prompt 模板（8 个）
 │   ├── intent_router.txt
 │   ├── customer_service.txt
 │   ├── trip_planner.txt
 │   ├── sales_agent.txt
 │   ├── operations_agent.txt
 │   ├── summary.txt            # 🆕 对话摘要 Prompt
-│   └── preference_extract.txt # 🆕 偏好提取 Prompt
+│   ├── preference_extract.txt # 🆕 偏好提取 Prompt
+│   └── query_rewrite.txt      # 🆕 查询改写 Prompt
 ├── tests/                 # 单元测试（193 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
@@ -436,6 +443,8 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 17 | 客服 RAG 管道重设计——双路检索（向量 + BM25）→ RRF 倒数排名融合 → Top-K → Prompt 注入 | ✅ |
 | Phase 18 | MCP 标准化 + 全量真实 API 接入——6 个独立 MCP Server（自研 JSON-RPC 2.0 over stdio），真实数据源（Open-Meteo/chinese-calendar/动态定价引擎），三层降级（MCP→mock→错误提示），Agent 零感知切换，TripPlanner 工具并行化 | ✅ |
 | Phase 18-续 | 流式输出打字机效果——BailianLLM.astream() 逐 token 推送 + stream_bridge 队列桥接 + SSE 端点重构（后台图任务+主循环读队列）；默认智能路由模式——前端 auto/默认 选项 + force_branch="" 触发意图分发；进度标签中文化——NODE_LABELS 补全 route_decision + fallback 去英文 | ✅ |
+| Phase 19 | 查询改写节点——主干链路插入 query_rewrite（session_context → query_rewrite → intent_router），LLM 纠错规范化（拼音→中文、中英混杂→统一中文、错别字修正），快速跳过机制（短确认+已规范中文免 LLM 调用），改写效果： "bei jing 3天 2 person" → "北京3天2人行程" | ✅ |
+| Phase 19-续 | 模型分层成本优化——三层架构（Light=qwen-turbo/Mid=qwen-plus/Heavy=qwen3-max），客服+运营 → qwen-turbo（↓~90% 费用），销售 → qwen-plus，行程保持 qwen3-max，新增 get_light_llm() 工厂，Agent 代码零改动 | ✅ |
 
 ## 许可证
 

@@ -4,9 +4,14 @@
 减少依赖链、提升异步并发能力、降低包体积。
 
 使用方式：
-    from services.llm import get_router_llm, get_agent_llm
+    from services.llm import get_router_llm, get_agent_llm, get_light_llm
     router_llm = get_router_llm()
     response = router_llm.invoke([{"role": "user", "content": "你好"}])
+
+模型分层策略（成本控制）：
+    get_light_llm()  → qwen-turbo   — 客服、运营（检索+工具调用，轻量足矣）
+    get_router_llm() → qwen-plus    — 销售、路由、意图识别（中等推理）
+    get_agent_llm()  → qwen3-max    — 行程定制（复杂长文本生成，需要最强模型）
 """
 
 import os
@@ -470,6 +475,7 @@ def _pydantic_to_tool_definition(schema: type[BaseModel]) -> dict:
 
 _router_llm: BailianLLM | None = None
 _agent_llm: BailianLLM | None = None
+_light_llm: BailianLLM | None = None
 
 
 def _get_api_key() -> str:
@@ -512,3 +518,25 @@ def get_agent_llm() -> BailianLLM:
             max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "4096")),
         )
     return _agent_llm
+
+
+def get_light_llm() -> BailianLLM:
+    """轻量任务用快速模型（qwen-turbo：极低延迟、最低成本）
+
+    适用于 FAQ 检索回答、CRM/CAPI 工具调用、查询改写等简单任务。
+    同样支持 function calling，无需担心工具调用兼容性。
+
+    环境变量：
+        LIGHT_MODEL, LLM_API_KEY, LLM_BASE_URL
+        LIGHT_TEMPERATURE（默认 0.7）, LIGHT_MAX_TOKENS（默认 2048）
+    """
+    global _light_llm
+    if _light_llm is None:
+        _light_llm = BailianLLM(
+            model=os.getenv("LIGHT_MODEL", "qwen-turbo"),
+            api_key=_get_api_key(),
+            base_url=os.getenv("LLM_BASE_URL", BAILIAN_BASE_URL),
+            temperature=float(os.getenv("LIGHT_TEMPERATURE", "0.7")),
+            max_tokens=int(os.getenv("LIGHT_MAX_TOKENS", "2048")),
+        )
+    return _light_llm

@@ -756,6 +756,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 NODE_LABELS: dict[str, str] = {
     "input_guard": "正在检查输入...",
     "session_context": "正在加载会话...",
+    "query_rewrite": "正在理解需求...",
     "intent_router": "正在分析意图...",
     "route_decision": "正在匹配业务专家...",
     "customer_service": "正在查询知识库...",

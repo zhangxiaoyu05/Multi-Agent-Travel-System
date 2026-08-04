@@ -9,6 +9,7 @@
 |------|-------------------|----------|
 | session_id/customer_id/channel/language | session_context | 所有 |
 | user_profile/user_preferences | session_context | 所有 |
+| original_query | query_rewrite | intent_router, 调试/审计 |
 | intent_scores | intent_router | route_decision, human_handoff |
 | current_branch | 各 Agent 节点 | route_decision, human_handoff |
 | need | trip_planner | trip_planner, human_handoff, operations_sync |
@@ -110,6 +111,9 @@ class AgentState(MessagesState):
     customer_id: str          # 客户唯一标识
     channel: str              # whatsapp / wechat / web / messenger / tiktok
     language: str             # zh / en / ja / ko（默认 zh）
+
+    # ====== 查询改写（owner: query_rewrite）======
+    original_query: str       # 用户原始输入（改写前），用于调试和审计
 
     # ====== 路由（owner: intent_router）======
     current_branch: str       # service / sales / operations / planner

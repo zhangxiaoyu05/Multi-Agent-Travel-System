@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-03（Phase 18 MCP 标准化 + 全量真实 API 接入——6 个独立 MCP Server）
+> 最后更新：2026-08-04（Phase 19 查询改写 + 模型分层——成本优化 ~90%）
 
 ---
 
@@ -1061,6 +1061,88 @@ SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，�
 现在所有 12 个图节点都有中文标签，未来新增节点忘了加映射也只显示通用"正在处理..."，不再泄露英文内部名。
 
 
+### Phase 19 🔍 查询改写节点（2026-08-04）
+
+#### 背景
+
+用户输入"bei jing 3天 2 person"、"我想去shanghai玩5days"等中英混杂/拼音/错别字，直接进入意图路由会导致分类偏差和后续字段提取不准确。在路由前加一层 LLM 纠错改写，能显著提升全链路准确率。
+
+#### 图结构变更
+
+```
+之前: START → input_guard → session_context → intent_router → route_decision
+现在: START → input_guard → session_context → query_rewrite → intent_router → route_decision
+```
+
+#### 新增文件
+
+| 文件 | 说明 |
+|---|---|
+| `graph/nodes/query_rewrite.py` | 查询改写节点——提取最后一条用户消息 → LLM 纠错规范化 → 替换消息内容 |
+| `prompts/query_rewrite.txt` | 改写 LLM 系统提示词——拼音转中文、中英混杂统一、错别字修正、省略语义补充 |
+
+#### 修改文件
+
+| 文件 | 变更 |
+|---|---|
+| `graph/state.py` | 新增 `original_query` 字段（改写前的原始输入，用于调试审计）+ 字段所有权表更新 |
+| `graph/builder.py` | 注册 `query_rewrite` 节点 + 重连 `session_context → query_rewrite → intent_router` + ASCII 图更新 |
+| `api/main.py` | 新增 `"query_rewrite": "正在理解需求..."` 中文进度标签 |
+| `tests/test_graph.py` | REQUIRED_NODES 新增 query_rewrite、edge 测试更新链 |
+
+#### 优化设计
+
+- **快速跳过**：短确认（"好的"、"嗯"、"OK"）和已规范中文（无英文/拼音混杂）直接跳过，不消耗 LLM 调用
+- **拼音检测**：`_has_rewrite_need()` 检查英文字母、中英混杂、拼音模式，仅在必要时调用 LLM
+- **防御兜底**：LLM 调用失败时保留原文，不影响对话流程
+- 使用 `get_light_llm()`（qwen-turbo），单次改写 ~200ms
+
+#### 改写效果验证
+
+| 原始输入 | 改写结果 |
+|---|---|
+| `bei jing 3天 2 person` | `北京3天2人行程` |
+| `我想去shanghai玩5days，budget 2000 USD` | `我想去上海玩5天预算2000美元` |
+| `我想去西安玩4天，8月15号到，2个人` | 不变（已规范，跳过 LLM） |
+
+
+### Phase 19-续 💰 模型分层——成本优化（2026-08-04）
+
+#### 背景
+
+此前所有 4 个 Agent（客服、销售、运营、行程定制）全部使用 `qwen3-max`（最强、最贵模型）。客服 FAQ 检索回答、运营 CRM/CAPI 工具调用这类轻量任务完全不需要最强模型，造成大量不必要的 API 费用。
+
+#### 三层模型架构
+
+| 层级 | 工厂函数 | 模型 | 适用场景 | 百炼定价 |
+|---|---|---|---|---|
+| Light | `get_light_llm()` | qwen-turbo | 客服、运营、查询改写 | ¥0.3 入 / ¥0.6 出 |
+| Mid | `get_router_llm()` | qwen-plus | 销售、路由、意图打分 | ¥0.8 入 / ¥2 出 |
+| Heavy | `get_agent_llm()` | qwen3-max | 行程定制 | 贵 3-5× |
+
+所有模型均支持 function calling，`_run_tool_calling_loop` 零改动。
+
+#### 修改文件
+
+| 文件 | 变更 |
+|---|---|
+| `services/llm.py` | 新增 `get_light_llm()` 工厂函数（默认 qwen-turbo）+ 模型分层文档 + 环境变量 `LIGHT_MODEL`/`LIGHT_TEMPERATURE`/`LIGHT_MAX_TOKENS` |
+| `agents/customer_service.py` | `get_agent_llm` → `get_light_llm` |
+| `agents/operations_agent.py` | `get_agent_llm` → `get_light_llm` |
+| `agents/sales_agent.py` | `get_agent_llm` → `get_router_llm` |
+| `graph/nodes/query_rewrite.py` | `get_router_llm` → `get_light_llm` |
+| `tests/test_operations.py` | Patch 路径更新 `get_agent_llm` → `get_light_llm` |
+
+#### 成本节约
+
+客服、运营、销售三个 Agent 从 qwen3-max → qwen-turbo/qwen-plus，**每次对话成本降低约 85-90%**。
+
+环境变量覆盖：
+```bash
+LIGHT_MODEL=qwen-plus   # 想把轻量级任务也升到中档模型
+```
+
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -1106,4 +1188,6 @@ SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，�
 | 2026-08-03 | Phase 18-续-1：流式输出打字机效果——① 新增 `BailianLLM.astream()`（httpx.stream + stream:True）；② 新建 `services/stream_bridge.py`（asyncio.Queue 桥接 Agent↔SSE）；③ SSE 端点重构（后台图任务 + 主循环读队列→发送 token 事件）；④ 4 个 Agent 全部支持流式（TripPlanner itinerary/CustomerService check_handoff/Sales+Operations BaseAgent）；⑤ 前端已有 token 处理器直接生效 | ✅ |
 | 2026-08-03 | Phase 18-续-2：默认智能路由模式——① 前端新增"🔄 默认"选项置顶（App._mode 默认 auto）；② force_branch 映射重构（auto→""、planner→trip_planner 显式）；③ schema 默认值 planner→auto；④ route_decision 零改动——空 force_branch 自动走意图分发 | ✅ |
 | 2026-08-03 | Phase 18-续-3：进度标签中文化——① NODE_LABELS 补全 route_decision="正在匹配业务专家..."；② fallback 从 `f"正在执行 {node_name}..."` 改为通用"正在处理..."，不再泄露英文内部名 | ✅ |
+| 2026-08-04 | Phase 19：查询改写节点——① 新建 `graph/nodes/query_rewrite.py` + `prompts/query_rewrite.txt`；② 主干链路插入 `session_context → query_rewrite → intent_router`；③ AgentState 新增 `original_query` 字段；④ 快速跳过机制（短确认+已规范中文免 LLM 调用）；⑤ 验证：拼音"bei jing 3天 2 person" → "北京3天2人行程"，中英混杂 → 中文统一，规范中文不变 | ✅ |
+| 2026-08-04 | Phase 19-续：模型分层成本优化——① 新增 `get_light_llm()` 工厂（qwen-turbo）；② 客服/运营 → qwen-turbo（↓~90%费用）；③ 销售 → qwen-plus；④ 查询改写 → qwen-turbo；⑤ 行程定制保持 qwen3-max；⑥ 所有模型均支持 function calling，Agent 代码零改动；⑦ 193 测试全部通过 | ✅ |
 

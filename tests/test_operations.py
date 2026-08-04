@@ -190,7 +190,7 @@ class TestOperationsNode:
 class TestOperationsAgentDirect:
     """直接测试 OperationsAgent.run()——Mock LLM 响应"""
 
-    @patch("agents.operations_agent.get_agent_llm")
+    @patch("agents.operations_agent.get_light_llm")
     async def test_agent_handles_merchant_onboarding(self, mock_get_llm):
         """商家入驻咨询应调用 CRM 并返回引导回复"""
         from langchain_core.messages import HumanMessage
@@ -233,7 +233,7 @@ class TestOperationsAgentDirect:
         assert "final_reply" in result
         assert result["need_human"] is False
 
-    @patch("agents.operations_agent.get_agent_llm")
+    @patch("agents.operations_agent.get_light_llm")
     async def test_agent_escalation_detection(self, mock_get_llm):
         """安全事故应检测升级转人工"""
         from langchain_core.messages import HumanMessage
@@ -273,7 +273,7 @@ class TestOperationsAgentDirect:
 class TestCRMEnforcement:
     """运营 Agent 强制 CRM 写入逻辑"""
 
-    @patch("agents.operations_agent.get_agent_llm")
+    @patch("agents.operations_agent.get_light_llm")
     async def test_llm_no_crm_call_enforces_write(self, mock_get_llm):
         """LLM 未调用 update_crm 时，Agent 应强制补充一条 CRM 记录"""
         from langchain_core.messages import HumanMessage

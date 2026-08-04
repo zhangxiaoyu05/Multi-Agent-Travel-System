@@ -11,7 +11,7 @@ from agents.base import BaseAgent
 from graph.state import AgentState
 from tools.rag_faq import search_faq
 from tools.mock_handoff import check_handoff
-from services.llm import get_agent_llm
+from services.llm import get_light_llm
 from services.stream_bridge import push_token
 from prompts import load_prompt, get_language_instruction
 
@@ -20,7 +20,7 @@ class CustomerServiceAgent(BaseAgent):
     """客服 Agent——RAG 检索 + 转人工评估"""
 
     def __init__(self):
-        llm = get_agent_llm()
+        llm = get_light_llm()
         # 仅注册 check_handoff 作为 LLM 可选工具（search_faq 由 Agent 主动调用）
         tools = [check_handoff]
         system_prompt = load_prompt("customer_service.txt")

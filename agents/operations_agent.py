@@ -8,7 +8,7 @@ import json
 from agents.base import BaseAgent
 from graph.state import AgentState
 from tools.mcp_tools import update_crm, send_capi
-from services.llm import get_agent_llm
+from services.llm import get_light_llm
 from prompts import load_prompt
 
 
@@ -16,7 +16,7 @@ class OperationsAgent(BaseAgent):
     """运营 Agent——CRM + CAPI + 工单处理"""
 
     def __init__(self):
-        llm = get_agent_llm()
+        llm = get_light_llm()
         tools = [update_crm, send_capi]
         system_prompt = load_prompt("operations_agent.txt")
         super().__init__(llm=llm, tools=tools, system_prompt=system_prompt)
