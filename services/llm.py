@@ -397,7 +397,16 @@ def _langchain_role(msg) -> str:
     """从 LangChain 消息类型推断 OpenAI role"""
     msg_type = getattr(msg, "type", None)
     if msg_type:
-        return msg_type
+        # LangChain 的 type 属性返回 "human"/"ai"/"system"/"tool"
+        # 需要映射到 OpenAI 兼容格式
+        type_map = {
+            "human": "user",
+            "ai": "assistant",
+            "system": "system",
+            "tool": "tool",
+            "function": "function",
+        }
+        return type_map.get(msg_type, "user")
     class_name = type(msg).__name__.lower()
     role_map = {
         "humanmessage": "user",

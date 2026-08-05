@@ -988,6 +988,18 @@ async def get_profile(user: dict = Depends(get_current_user)):
         profile = await mm.ensure_profile(user["user_id"], user.get("username", ""))
         profile["username"] = user.get("username", "")
 
+        # 2.5 Sanitize budget_range——确保是 dict 或 None（防御数据库中非 JSON 字符串）
+        br = profile.get("budget_range")
+        if br is not None and not isinstance(br, dict):
+            if isinstance(br, str):
+                try:
+                    import json as _json
+                    profile["budget_range"] = _json.loads(br)
+                except Exception:
+                    profile["budget_range"] = None
+            else:
+                profile["budget_range"] = None
+
         # 3. 缓存到 Redis
         await cache_user_profile(user["user_id"], profile)
 

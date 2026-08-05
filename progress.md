@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-05（Phase 21-续-3 E2E 测试修复——多语言指令 + Profile 路由 + 模型配置对齐）
+> 最后更新：2026-08-05（Phase 21-续-4 E2E 全功能测试——4 个 Bug 修复 + MCP 死锁/角色映射/画像/数据库表）
 
 ---
 
@@ -1274,6 +1274,69 @@ Chrome DevTools E2E 全功能测试发现 3 个问题，均已修复。
 - 5 文件修改：`agents/customer_service.py`、`api/main.py`、`frontend/profile.html`、`frontend/index.html`、`services/llm.py`
 
 
+### Phase 21-续-4 🔧 E2E 全功能测试——4 个 Bug 修复（2026-08-05）
+
+Chrome DevTools 全功能 E2E 测试（行程定制/智能客服/销售/多语言/画像/打断/模式切换/语言切换），发现并修复 4 个问题。
+
+#### 修复 1: P0 MCP Server 死锁——应用无法启动
+
+**问题**：Docker 容器中应用启动后，`/health` 端点始终返回空响应，浏览器无法访问。
+
+**根因**：`MCPServerConnection.start()` 持有 `self._lock`（asyncio.Lock，非可重入）后调用 `self._send_request("initialize", ...)`，后者也尝试获取同一个锁 → 死锁。全部 6 个 MCP Server 启动全部卡死，阻塞 FastAPI lifespan（`yield` 前的 `await mcp.start_all()` 永远不返回），导致 uvicorn 无法开始处理 HTTP 请求。
+
+**修复**（`services/mcp_client.py`）：
+- `self._lock` 拆分为 `self._lifecycle_lock`（保护 start/stop）和 `self._request_lock`（保护 stdin/stdout 请求通信）
+- `start()` 和 `stop()` 使用 `_lifecycle_lock`
+- `_send_request()` 使用 `_request_lock`
+
+**验证**：修复后所有 6 个 MCP Server 在 1 秒内全部初始化成功，health 返回 200 OK。
+
+#### 修复 2: P1 Profile 页面 Pydantic 验证错误
+
+**问题**：`GET /profile` 页面显示 "加载失败: 获取画像失败: budget_range Input should be a valid dictionary or instance of BudgetRange, input_value='$1500/人'"。
+
+**根因**：`_row_to_profile()` 虽有 JSON 解析容错（`json.loads` 失败→None），但 Redis 缓存中存储了历史脏数据（`budget_range` 为纯字符串 `"$1500/人"` 而非 JSON dict），`get_cached_user_profile` 直接返回缓存数据不经过 `_row_to_profile` 的解析。
+
+**修复**（`api/main.py`）：
+- `/api/profile` 端点新增 sanitization 步骤：缓存/MySQL 加载后，检查 `budget_range` 是否为合法 dict，非 dict 则尝试 `json.loads` 解析，失败则置 None
+- 清除 Redis 脏缓存 `DEL profile:user-8ac39be47478`
+
+#### 修复 3: P1 销售/运营 Agent 调用百炼 API 400 错误
+
+**问题**：销售 Agent（6 tools）和运营 Agent（12 tools）调用百炼 API 返回 400 错误：`"human is not one of ['system', 'assistant', 'user', 'tool', 'function']"`。
+
+**根因**：`_langchain_role()` 函数中，当 LangChain 消息对象有 `type` 属性时直接返回该值（如 `"human"`、`"ai"`），未映射到 OpenAI 兼容格式（`"user"`、`"assistant"`）。之前客服/行程定制 Agent 不受影响是因为它们使用 `_get_user_message()` 提取纯文本后构建新消息（dict 格式），不会携带 LangChain 消息的 `type` 属性；而销售/运营 Agent 通过 `_get_message_history()` 直接传递 State 中的 LangChain 消息对象，触发此 Bug。
+
+**修复**（`services/llm.py`）：
+- `_langchain_role()` 在 `msg.type` 路径中新增 type 映射表：`{"human": "user", "ai": "assistant", "system": "system", "tool": "tool", "function": "function"}`
+
+#### 修复 4: P2 缺少 3 张数据库表
+
+**问题**：销售 Pipeline 保存时报 `Table 'travel_agent.sales_pipeline' doesn't exist`；运营订单/工单表同理。
+
+**根因**：Phase 20-21 新增的 `sales_pipeline`、`orders`、`tickets` 三张表的 DDL 存在 `scripts/migrate_mysql.sql` 中，但该脚本仅在 MySQL 容器**首次初始化**（volume 为空）时执行。已有 volume 的数据库不会自动创建新表。
+
+**修复**：手动执行 DDL 创建三张表（已包含在 `migrate_mysql.sql` 中，后续重建容器时会自动创建）。
+
+#### 测试覆盖
+
+Chrome DevTools E2E 测试通过：
+- ✅ 模式切换（5 种：默认/行程定制/智能客服/销售咨询/运营处理）
+- ✅ 语言切换（中文 → Español，AI 完整西班牙语回复）
+- ✅ 智能客服 FAQ（双路 RAG 检索 + 签证材料详细回答）
+- ✅ 投诉转人工（结构化紧急交接单 + Agent 执行链）
+- ✅ 行程定制 SSE（逐 token 流式 + 精美 Markdown 渲染）
+- ✅ 打断功能（停止按钮 + ⚠已中断标签 + 输入框恢复）
+- ✅ 销售 Pipeline（QUALIFIED 阶段话术 + 用户画像引用）
+- ✅ 用户画像页面（基础信息 + 旅行偏好完整展示）
+
+#### 验证
+
+- 243/243 测试全部通过，零回归
+- 3 文件修改：`services/mcp_client.py`、`services/llm.py`、`api/main.py`
+- 手动操作：Redis 缓存清理 `DEL profile:*` + MySQL DDL 建表
+
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -1326,4 +1389,5 @@ Chrome DevTools E2E 全功能测试发现 3 个问题，均已修复。
 | 2026-08-05 | Phase 21：运营 Agent 重设计——用户与产品的桥梁：① 数据库新建 orders + tickets 表；② 10 个运营工具（产品查询×4 search_hotels/flights/tickets/guides + 订单管理×4 get_order/list_orders/cancel_order/modify_order + 工单×2 create_ticket/check_ticket）；③ 运营工具作为平台共享能力层（MCP→Mock 降级）；④ Agent 重写：12 工具 + WON 接管 + 紧急升级 + CRM 强制写入；⑤ 新建 operations_handoff 节点（销售成交后运营自动接管）；⑥ after_sales 路由新增 won→operations_handoff→operations_sync；⑦ session_context 检测 has_active_order → intent_router 加权 operations ×1.5；⑧ State 新增 has_active_order/active_order_id/order_context 字段；⑨ MemoryManager 新增 7 个 order/ticket CRUD 方法；⑩ 新建 2 文件/重写 3 文件/修改 10 文件；⑪ 243 测试全部通过（+28 运营专项测试） | ✅ |
 | 2026-08-05 | Phase 21-续-2：LIGHT_MODEL 修复——① 销售 Agent（6 tools）和运营 Agent（12 tools）调用 qwen-turbo 时 API 返回 400 → 根因是 qwen-turbo 不支持多工具 function calling；② `get_light_llm()` 默认模型从 `qwen-turbo` 改为 `qwen-plus`（代码默认 + `.env` 显式配置）；③ `.env.example` 补全 LIGHT_MODEL/LIGHT_TEMPERATURE/LIGHT_MAX_TOKENS 文档；④ `ainvoke()` 新增详细错误日志（记录 API 响应体便于排查）；⑤ ⚠️ 需重启后端使配置生效 | ✅ |
 | 2026-08-05 | Phase 21-续-3：E2E 测试 3 项修复——① P0 西班牙语回复中文：`customer_service.py` 最终回答指令改为 7 语言感知（zh/en/es/ja/ko/hi/ar）+ 投诉关键词扩展为 7 语言；② P1 Profile 页面路由冲突：API 端点 `/profile*` → `/api/profile*`（GET/PUT/suggestions），新增 `GET /profile` 返回 HTML 页面，`profile.html` API 路径同步，`index.html` 侧边栏画像链接更新；③ P1 ROUTER_MODEL 不一致：`.env` 中 `ROUTER_MODEL` 从 `qwen-turbo` 修正为 `qwen-plus`（与 `.env.example` 对齐）；④ `services/llm.py` 新增 `reset_all_singletons()` 免重启切换 + `_build_body()` 调试日志；⑤ `api/main.py` 启动日志新增 LIGHT_MODEL 行；⑥ 5 文件修改，243 测试通过 | ✅ |
+| 2026-08-05 | Phase 21-续-4：Chrome DevTools E2E 全功能测试 + 4 个 Bug 修复——① P0 MCP Server 死锁：`MCPServerConnection` 的 `start()` 和 `_send_request()` 共用一个非可重入 asyncio.Lock → 拆分为 `_lifecycle_lock` + `_request_lock`；② P1 Profile Pydantic 验证错误：Redis 缓存中 `budget_range` 为脏字符串 → API 端点加 sanitization + 清除 Redis 缓存；③ P1 销售/运营 Agent 400 错误：`_langchain_role()` 中 `msg.type="human"` 未映射为 `"user"` → 添加 type 映射表；④ P2 数据库缺表：已有 volume 缺少 Phase 20-21 新增的 `sales_pipeline`/`orders`/`tickets` 表 → 手动执行 DDL 创建；⑤ 测试覆盖：模式切换/语言切换/智能客服FAQ/投诉转人工/西班牙语/行程定制SSE/打断/销售Pipeline/用户画像 全部通过；⑥ 3 文件修改 + 2 项手动操作，243 测试通过 | ✅ |
 

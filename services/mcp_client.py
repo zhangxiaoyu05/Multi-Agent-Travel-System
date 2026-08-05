@@ -83,7 +83,8 @@ class MCPServerConnection:
         self.script_path = script_path
         self.project_root = project_root
         self._process: asyncio.subprocess.Process | None = None
-        self._lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()  # 保护 start/stop 操作
+        self._request_lock = asyncio.Lock()    # 保护 stdin/stdout 请求通信（独立，避免死锁）
         self._request_id = 0
         self._tools_cache: list[dict] | None = None
 
@@ -93,7 +94,7 @@ class MCPServerConnection:
 
     async def start(self):
         """启动 MCP Server 子进程"""
-        async with self._lock:
+        async with self._lifecycle_lock:
             if self._process is not None and self._process.returncode is None:
                 return  # 已经在运行
 
@@ -124,7 +125,7 @@ class MCPServerConnection:
 
     async def stop(self):
         """停止 MCP Server 子进程"""
-        async with self._lock:
+        async with self._lifecycle_lock:
             if self._process is None:
                 return
             proc = self._process
@@ -160,7 +161,7 @@ class MCPServerConnection:
         if self._process is None or self._process.returncode is not None:
             raise MCPToolError(f"MCP server [{self.name}] is not running")
 
-        async with self._lock:
+        async with self._request_lock:
             self._request_id += 1
             req_id = self._request_id
             request = {
