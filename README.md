@@ -37,6 +37,8 @@
 >
 > 🎯 **行程定制预检（Phase 22-续-2）**：行程规划类消息（如"我想去拉萨，一个人，预算5000元"）在调用 LLM 前由正则预检拦截——8 个正向模式（独立"定制"、设计/规划行程、目的地改为X、多要素组合、独立"我想去X"等）+ 4 个 FAQ 排除模式（签证/边防证/流程/材料询问），命中后直接返回 `planner=0.85` + `journey_stage="planning"`，跳过 LLM 意图分类，消除对话历史惯性导致的误判。Chrome DevTools E2E 验证：全链路 定制(85%)→销售(85%) 接力正常。
 >
+> 🕐 **侧边栏时间修复（Phase 22-续-3）**：`save_message()` 插入消息后未同步更新 `conversations.updated_at`，导致前端左侧对话列表时间不随新消息刷新。修复后每次保存消息时同步 `UPDATE conversations SET updated_at = CURRENT_TIMESTAMP`。
+>
 > 🧠 **三层记忆系统（AI 可读）**：短期（Redis+MySQL 对话缓存 → Agent 上下文）、中期（LLM 提取旅行偏好 → 自动补全需求）、长期（用户画像 → Agent Prompt 注入）。切换窗口不丢失，AI 主动引用用户偏好减少追问。
 >
 > 🎨 **Markdown 渲染**：AI 回复使用原生 Markdown 格式（标题/分隔线/列表/代码块/粗体），前端块级解析引擎渲染，告别 ASCII `====`/`----` 符号。

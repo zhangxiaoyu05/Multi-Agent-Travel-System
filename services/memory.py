@@ -71,6 +71,11 @@ class MemoryManager:
                     "meta": json.dumps(metadata, ensure_ascii=False) if metadata else None,
                 },
             )
+            # 同步更新 conversations.updated_at，保证侧边栏时间准确
+            await conn.execute(
+                text("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE conversation_id = :cid"),
+                {"cid": conversation_id},
+            )
             return result.lastrowid
 
     async def get_messages(
