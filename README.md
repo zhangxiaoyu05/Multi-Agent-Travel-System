@@ -460,7 +460,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 21 | 运营 Agent 重设计——用户与产品的桥梁：数据库 orders+tickets 表 + 10 个运营工具（产品查询×4 + 订单管理×4 + 工单×2）+ 工具即平台共享能力层（trip_planner/sales 也可调用）+ Agent 重写（12 工具 + WON 接管 + 紧急升级）+ operations_handoff 节点（销售成交运营自动接管）+ has_active_order 路由加权 + 新建 2 文件/重写 3 文件/修改 10 文件 + 243 测试全部通过 | ✅ |
 | Phase 21-续 | E2E 测试修复：LIGHT_MODEL qwen-turbo→qwen-plus（多工具调用 400）+ 西班牙语回复中文（7语言指令）+ Profile 页面路由冲突（API→/api/*）+ ROUTER_MODEL 对齐 .env.example + reset_all_singletons() 免重启切换 | ✅ |
 | Phase 21-续-4 | E2E 全功能测试——Chrome DevTools 测试 9 大功能模块 + 4 个 Bug 修复（P0 MCP Server 死锁、P1 Profile Pydantic 验证错误、P1 销售/运营 Agent 400 错误、P2 数据库缺表）+ 243 测试通过 | ✅ |
-| Phase 21-续-5 | E2E 续测（默认路由/运营/删除/画像编辑/语言切换）+ Bug #5 修复（budget_range VARCHAR(32)→128：JSON 超长截断）+ 6 项测试全部通过 | ✅ |
+| Phase 21-续-5 | E2E 续测 11 项全覆盖（默认路由/运营/删除/画像/语言/销售Pipeline/西班牙语/空消息/客服FAQ/退出登录/模式视觉）+ Bug #5 修复（budget_range VARCHAR(32)→128） | ✅ |
 
 ## 许可证
 
