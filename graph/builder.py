@@ -182,7 +182,7 @@ def build_graph(checkpointer=None):
         }
     )
 
-    # 定制分支：修订决策
+    # 定制分支：修订决策（v4.1: accept+stage变更→route_decision 同轮交接）
     builder.add_conditional_edges(
         "intent_scorer",
         revision_decision,
@@ -190,6 +190,7 @@ def build_graph(checkpointer=None):
             "operations_sync": "operations_sync",
             "revision_loop": "revision_loop",
             "human_handoff": "human_handoff",
+            "route_decision": "route_decision",
         }
     )
 

@@ -32,6 +32,7 @@ from tools.mcp_tools import (
     get_payment_url,
     apply_coupon,
     check_order_status,
+    process_payment,
 )
 from services.llm import get_light_llm
 from prompts import load_prompt
@@ -101,16 +102,26 @@ def _detect_clear_rejection(text: str) -> bool:
 
 def _determine_next_stage(
     current_stage: str, user_msg: str, llm_reply: str, has_draft: bool,
+    tool_results: dict | None = None,
 ) -> str:
-    """根据用户消息和 LLM 回复判定阶段转换
+    """根据用户消息、LLM 回复和工具调用结果判定阶段转换
 
     规则优先级（代码判定为主，LLM 辅助）：
-    1. 明确拒绝 → LOST
-    2. 强购买信号 → CLOSING
-    3. 有 draft 且当前 LEAD → QUALIFIED
-    4. 谈价格/优惠 → NEGOTIATION
-    5. 订单创建成功 → WON
+    1. process_payment 调用成功 → WON
+    2. 明确拒绝 → LOST
+    3. 强购买信号 → CLOSING
+    4. 有 draft 且当前 LEAD → QUALIFIED
+    5. 谈价格/优惠 → NEGOTIATION
+    6. 订单创建成功 → WON
     """
+    tool_results = tool_results or {}
+
+    # process_payment 调用成功 → WON（最高优先级）
+    if "process_payment" in tool_results:
+        pr_result = tool_results["process_payment"]
+        if "支付成功" in str(pr_result):
+            return STAGE_WON
+
     # 明确拒绝 → LOST
     if _detect_clear_rejection(user_msg):
         return STAGE_LOST
@@ -119,10 +130,8 @@ def _determine_next_stage(
     if _detect_strong_buy(user_msg):
         return STAGE_CLOSING
 
-    # 订单创建成功 → WON
-    if "订单已创建" in llm_reply or "支付链接" in llm_reply:
-        return STAGE_WON
-    if "订单编号" in llm_reply and "ORD-" in llm_reply:
+    # 支付成功关键词 → WON（v4.1: 仅支付成功触发 WON，订单创建不再触发）
+    if "支付成功" in llm_reply or "付款成功" in llm_reply or "已到账" in llm_reply:
         return STAGE_WON
 
     # 有 draft 但还在 LEAD → 升级到 QUALIFIED
@@ -260,6 +269,7 @@ class SalesAgent(BaseAgent):
             get_payment_url,
             apply_coupon,
             check_order_status,
+            process_payment,
         ]
         # 初始 prompt 用 LEAD，run() 中会根据实际阶段切换
         system_prompt = load_prompt("sales_lead.txt")
@@ -345,6 +355,7 @@ class SalesAgent(BaseAgent):
         # ── 第 7 步：阶段转换判定 ──
         new_stage = _determine_next_stage(
             current_stage, user_msg, final_text, has_draft,
+            tool_results=loop_result.get("tool_results", {}),
         )
 
         # ── 第 8 步：检测行程修改 ──
@@ -391,11 +402,20 @@ class SalesAgent(BaseAgent):
                 "from_agent": "sales_agent",
                 "order_summary": f"{draft_ctx.get('destination', '')}{draft_ctx.get('days', '')}天" if draft_ctx else "",
             }
-            # 尝试提取订单号
+            # 尝试从工具结果提取订单号
             import re as _re
-            order_match = _re.search(r'ORD-[\w-]+', final_text)
-            if order_match:
-                hc["order_id"] = order_match.group(0)
+            for tool_name in ["process_payment", "create_order"]:
+                tr = loop_result.get("tool_results", {}).get(tool_name, "")
+                if tr:
+                    order_match = _re.search(r'ORD-[\w-]+', str(tr))
+                    if order_match:
+                        hc["order_id"] = order_match.group(0)
+                        break
+            # 回退到从 final_text 提取
+            if not hc.get("order_id"):
+                order_match = _re.search(r'ORD-[\w-]+', final_text)
+                if order_match:
+                    hc["order_id"] = order_match.group(0)
         elif goto_planner:
             journey_stage = "planning"
             next_agent = "trip_planner"

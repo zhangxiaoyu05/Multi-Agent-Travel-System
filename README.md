@@ -29,7 +29,7 @@
 
 > 💡 **运营 Agent 重设计（Phase 21）**：运营重新定位为"用户与产品的桥梁"——① 10 个共享工具（产品查询 search_hotels/flights/tickets/guides + 订单管理 get_order/list_orders/cancel_order/modify_order + 工单 create_ticket/check_ticket）；② WON 成交后自动接管（operations_handoff 节点生成接管消息）；③ 活跃订单自动路由加权（has_active_order → operations ×1.5）；④ 产品查询工具作为平台共享能力层，trip_planner/sales 也可调用。
 >
-> 🔗 **旅程驱动多 Agent 协作（Phase 22）**：核心架构升级——引入 `journey_stage`（粗粒度 4 阶段：discovery→planning→sales→post_purchase）+ `next_agent`（Agent 自主声明下一站）+ `handoff_context`（交接上下文）。路由从意图分类主导向旅程阶段驱动转变：非 discovery 阶段跳过 LLM 意图分类，直接路由到 stage 对应 Agent。三个 Agent 出口统一为 `_agent_exit`（仅当 next_agent ≠ current_branch 时重路由，避免循环）。Agent 间通过 `handoff_context` 接力：trip_planner 确认 → sales_agent（QUALIFIED 阶段，跳过 LEAD）；sales_agent WON → operations_agent；operations_agent 回流转 → trip_planner/sales_agent。E2E 验证通过：行程定制(85%)→确认→销售咨询(85%)全链路打通。
+> 🔗 **旅程驱动多 Agent 协作（Phase 22 + 22-续）**：核心架构升级——引入 `journey_stage`（粗粒度 4 阶段：discovery→planning→sales→post_purchase）+ `next_agent`（Agent 自主声明下一站）+ `handoff_context`（交接上下文）。路由从意图分类主导向旅程阶段驱动转变：非 discovery 阶段跳过 LLM 意图分类，直接路由到 stage 对应 Agent。Agent 间通过 `handoff_context` 接力：trip_planner 确认 → sales_agent（同轮自动接管，QUALIFIED 阶段跳过 LEAD）；sales_agent 假支付 → `process_payment` mock 工具 → WON → operations_agent（同轮自动接管）；operations_agent 回流转 → trip_planner/sales_agent。三个 Agent 出口统一为 `_agent_exit`（仅当 next_agent ≠ current_branch 时重路由，避免循环）。E2E 验证通过：行程定制(85%)→确认→销售咨询(85%)同轮切换。
 
 > 💡 **共享黑板**：所有节点共用 `AgentState`，字段有明确 owner。新增 `handoff`（转人工上下文）、`agent_traces`（追加式审计日志）、`branch_history`（路径追踪）。分支切换时自动重置控制信号防止跨分支污染。
 > 
@@ -465,6 +465,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 21-续-4 | E2E 全功能测试——Chrome DevTools 测试 9 大功能模块 + 4 个 Bug 修复（P0 MCP Server 死锁、P1 Profile Pydantic 验证错误、P1 销售/运营 Agent 400 错误、P2 数据库缺表）+ 243 测试通过 | ✅ |
 | Phase 21-续-5 | E2E 续测 11 项全覆盖（默认路由/运营/删除/画像/语言/销售Pipeline/西班牙语/空消息/客服FAQ/退出登录/模式视觉）+ Bug #5 修复（budget_range VARCHAR(32)→128） | ✅ |
 | **Phase 22** | **旅程驱动的多 Agent 协作**——journey_stage 4阶段状态机 + next_agent 接力 + handoff_context 交接 + 意图路由降级为打断检测 + _agent_exit 统一出口 + Agent 交接协议（定制→销售→运营→回流转）+ Bug 修复（_agent_exit 无限循环）+ 14 文件修改 | ✅ |
+| Phase 22-续 | **同轮交接 + 假支付——全链路自动接力**——revision_decision accept+阶段变更→route_decision（同轮交接）+ intent_scorer→route_decision 新边 + trip_planner `_is_confirm_signal()` 快速确认检测 + `process_payment` 假支付 mock 工具 + sales_agent WON 检测重构（仅支付成功触发，create_order 不再误判）+ sales_closing Prompt 支付流程引导 + 测试更新（98 全部通过）+ E2E 浏览器验证（定制→销售同轮切换） | ✅ |
 
 ## 许可证
 

@@ -182,6 +182,19 @@ class TripPlannerAgent(BaseAgent):
                 "next_agent": "trip_planner",
             }
 
+        # ── v4.1: 快速确认检测 —— 用户只是确认/接受草案，无需重新生成 ──
+        existing_draft = state.get("draft", {}) or {}
+        has_existing_draft = bool(existing_draft.get("itinerary_md"))
+        if has_existing_draft and self._is_confirm_signal(user_msg):
+            return {
+                "need": existing_need,
+                "draft": existing_draft,
+                "final_reply": "好的，您的行程方案已确认！",
+                "current_branch": "trip_planner",
+                "journey_stage": "planning",  # intent_scorer 会改为 sales
+                "next_agent": "trip_planner",
+            }
+
         # Step 1: 提取需求字段
         if revision_count > 0:
             merged_need = existing_need
@@ -296,6 +309,51 @@ class TripPlannerAgent(BaseAgent):
     # =========================================================================
     # 私有方法
     # =========================================================================
+
+    @staticmethod
+    def _is_confirm_signal(user_msg: str) -> bool:
+        """检测用户消息是否为对行程草案的确认/接受（非修订请求）。
+
+        确认信号：用户满意方案，不需要修改，直接进入销售。
+        非确认信号：包含修改/调整/新增等修订意图。
+        """
+        msg = user_msg.strip()
+
+        # 修订信号（先检测，有修订意图就不算确认）
+        revise_patterns = [
+            r"(?:不想|不要|不喜欢|不满意|去掉|删除|取消|移除|删掉)",
+            r"(?:改|调整|修|换|换一|换下|改下|修改|更新|变化|变更|替换)",
+            r"(?:再加|多去|增加|添加|加上|补充|新增)",
+            r"(?:能不能|可否|是否|能否)",  # 不含"可以"——单独的"可以"是确认
+            r"可以.{2,}(?:改|调整|修|换|加|增|删|取消|帮|给)",  # "可以+改动内容"才是修订
+            r"(?:换个|改个|调整一下|换一下)",
+            r"(?:第.*天|Day\s*\d)",  # 提到具体天数的修改
+            r"(?:酒店|机票|门票|导游|预算|价格|费用|天数|日期)",
+        ]
+        for pattern in revise_patterns:
+            if re.search(pattern, msg):
+                return False
+
+        # 确认信号
+        confirm_patterns = [
+            r"^(?:好的?|可以|行|OK|ok|嗯|对|是的|没错|没问题|没问题了|没问题啦)$",
+            r"^(?:不错|很好|非常好|太棒了|完美|满意|挺不错|很不错)$",
+            r"^(?:就这[样个]|就这个|就它|就按这个|就这样吧|就按这样)$",
+            r"^(?:确认|接受|同意|认可|批准|通过)$",
+            r"^(?:方案)?(?:不错|很好|可以|满意|行|OK|ok).*(?:就这样|就这个|就它|确认|下单|预订|支付|付款|买|订)",
+            r"^(?:我)?(?:要|想|准备|打算).*(?:确认|下单|预订|支付|付款|买|订)",
+            r"^(?:帮我|给我|我要|我想).*(?:下单|预订|订|买|付款|支付)",
+            r"^(?:下单|预订|支付|付款|买|订|就这个|就这样)",
+        ]
+        for pattern in confirm_patterns:
+            if re.search(pattern, msg):
+                return True
+
+        # 短消息（≤5字）且不含修订信号 → 倾向认为是确认
+        if len(msg) <= 5:
+            return True
+
+        return False
 
     @staticmethod
     def _extract_from_history(state: AgentState) -> dict:

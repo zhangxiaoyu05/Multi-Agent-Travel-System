@@ -217,6 +217,52 @@ def apply_coupon(user_id: str, draft_id: str, amount: str = "") -> str:
 
 
 @tool
+def process_payment(order_id: str) -> str:
+    """模拟支付处理——确认订单支付成功。
+
+    这是 Mock 实现，始终返回支付成功。
+    真实场景中会对接微信支付/支付宝/信用卡网关。
+
+    Args:
+        order_id: 订单编号（由 create_order 返回）
+
+    Returns:
+        支付结果确认文本
+    """
+    if order_id not in _ORDERS:
+        # 即使订单不在内存中也允许支付（mock 宽松处理）
+        _ORDERS[order_id] = {
+            "order_id": order_id,
+            "draft_id": "unknown",
+            "status": "paid",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    order = _ORDERS[order_id]
+    order["status"] = "paid"
+    order["paid_at"] = datetime.now(timezone.utc).isoformat()
+
+    transaction_id = f"TXN-{uuid.uuid4().hex[:12].upper()}"
+
+    lines = [
+        "## 支付成功 ✅",
+        "",
+        f"| 项目 | 详情 |",
+        f"|------|------|",
+        f"| 订单编号 | **{order_id}** |",
+        f"| 交易流水号 | {transaction_id} |",
+        f"| 支付时间 | {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} |",
+        f"| 支付方式 | 微信支付 |",
+        f"| 支付状态 | ✅ 已到账 |",
+        "",
+        "> 🎉 支付成功！您的行程已锁定，即将由运营专员接管后续服务。",
+    ]
+
+    return "\n".join(lines)
+
+
+@tool
 def check_order_status(user_id: str) -> str:
     """检查用户是否有未完成或已完成的订单。
 

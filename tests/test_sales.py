@@ -184,19 +184,30 @@ class TestSalesPipeline:
         )
         assert stage == "negotiation"
 
-    def test_order_created_to_won(self):
+    def test_order_created_stays_closing(self):
+        """v4.1: 仅创建订单（未支付）不应触发 WON，保持 closing 状态"""
         from agents.sales_agent import _determine_next_stage
         stage = _determine_next_stage(
-            "closing", "好的我付款", "订单已创建 ORD-ABC12345", has_draft=True,
+            "closing", "好的我付款", "订单已创建 ORD-ABC12345，回复「支付」完成付款", has_draft=True,
         )
-        assert stage == "won"
+        assert stage == "closing", f"Expected closing, got {stage}"
 
-    def test_payment_link_to_won(self):
+    def test_payment_success_to_won(self):
+        """v4.1: 支付成功后应触发 WON"""
         from agents.sales_agent import _determine_next_stage
         stage = _determine_next_stage(
-            "closing", "好的", "这是支付链接 https://pay.example.com/...", has_draft=True,
+            "closing", "支付", "支付成功！您的订单 ORD-ABC12345 已确认，行程已锁定。", has_draft=True,
         )
-        assert stage == "won"
+        assert stage == "won", f"Expected won, got {stage}"
+
+    def test_process_payment_tool_to_won(self):
+        """v4.1: 调用 process_payment 工具成功后应触发 WON"""
+        from agents.sales_agent import _determine_next_stage
+        stage = _determine_next_stage(
+            "closing", "支付", "正在处理...", has_draft=True,
+            tool_results={"process_payment": "支付成功 ✅\n订单编号 ORD-XYZ\n交易流水号 TXN-ABC"}
+        )
+        assert stage == "won", f"Expected won, got {stage}"
 
 
 # =============================================================================

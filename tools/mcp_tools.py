@@ -480,6 +480,24 @@ def check_ticket(ticket_id: str) -> str:
 
 
 @tool
+def process_payment(order_id: str) -> str:
+    """模拟支付处理——确认订单支付成功。
+
+    Mock 实现，始终返回支付成功。真实场景对接支付网关。
+
+    Args:
+        order_id: 订单编号
+
+    Returns:
+        支付确认文本（含交易流水号）
+    """
+    def _mock(order_id):
+        from tools.mock_sales import process_payment as mock_fn
+        return mock_fn.invoke({"order_id": order_id})
+    return _mcp_call("process_payment", {"order_id": order_id}, _mock)
+
+
+@tool
 def send_capi(event_type: str, event_data: str) -> str:
     """上报转化事件到广告平台（Meta/Google/TikTok）。
 

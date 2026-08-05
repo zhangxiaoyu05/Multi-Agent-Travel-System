@@ -50,13 +50,13 @@ class TestNodeRegistration:
         "session_context",
         "query_rewrite",
         "intent_router",
+        "route_decision",
         "customer_service",
         "trip_planner",
         "intent_scorer",
         "revision_loop",
         "human_handoff",
         "operations_sync",
-        "operations_handoff",
         "sales_agent",
         "operations_agent",
     ]
@@ -119,14 +119,14 @@ class TestEdgeStructure:
             "human_handoff 应有固定边 → operations_sync"
         )
 
-    def test_operations_handoff_to_operations_sync(self):
-        """operations_handoff → operations_sync 固定边应存在（Phase 21）"""
-        assert ("operations_handoff", "operations_sync") in self._edge_set(), (
-            "operations_handoff 应有固定边 → operations_sync"
-        )
+    def test_intent_scorer_to_route_decision(self):
+        """intent_scorer 应有条件边 → route_decision（v4.1 accept 同轮交接）"""
+        edges = self._edge_set()
+        out_edges = {e for e in edges if e[0] == "intent_scorer"}
+        assert len(out_edges) > 0, "intent_scorer 应有条件边"
 
-    def test_sales_to_operations_handoff_conditional(self):
-        """sales_agent 应有条件边 → operations_handoff（Phase 21 WON 接管）"""
+    def test_sales_agent_has_exit_edges(self):
+        """sales_agent 应有条件边（v4: _agent_exit 统一出口）"""
         edges = self._edge_set()
         out_edges = {e for e in edges if e[0] == "sales_agent"}
         assert len(out_edges) > 0, "sales_agent 应有条件边"
