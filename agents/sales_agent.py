@@ -207,6 +207,42 @@ def _build_draft_context(state: AgentState) -> dict | None:
     return None
 
 
+def _load_draft_from_handoff(handoff: dict, state: AgentState) -> dict | None:
+    """从交接上下文中加载行程草稿信息。
+
+    优先使用 handoff_context 中的字段，其次从 State 提取，
+    最后尝试从 MySQL 加载。
+    """
+    dest = handoff.get("destination", "")
+    days = handoff.get("days", 0)
+    pax = handoff.get("pax", 0)
+    budget = handoff.get("budget", "")
+    theme = handoff.get("theme", "")
+
+    # 如果有 itinerary_md 直接用
+    itinerary_md = handoff.get("itinerary_md", "")
+    draft_id = handoff.get("draft_id", "")
+
+    if dest and days:
+        return {
+            "destination": dest,
+            "days": days,
+            "pax": pax,
+            "budget": budget,
+            "theme": theme,
+            "itinerary_summary": itinerary_md[:1000] if itinerary_md else f"{dest}{days}日游",
+            "draft_id": draft_id,
+        }
+
+    # 回退到 State 提取
+    ctx = _build_draft_context(state)
+    if ctx:
+        ctx["draft_id"] = draft_id or state.get("session_id", "")
+        return ctx
+
+    return None
+
+
 # =============================================================================
 # SalesAgent
 # =============================================================================
@@ -235,10 +271,46 @@ class SalesAgent(BaseAgent):
         customer_id = state.get("customer_id", "unknown")
         session_id = state.get("session_id", "")
 
-        # ── 第 1 步：加载销售上下文 ──
-        draft_ctx = _build_draft_context(state)
-        has_draft = draft_ctx is not None
-        pipeline = await self._load_pipeline(customer_id, state, draft_ctx)
+        # ── 第 0 步：检查交接上下文（v4: 从 trip_planner / ops 交接过来了）──
+        handoff = self._get_handoff_context(state)
+        handoff_reason = handoff.get("reason", "")
+        is_handoff = bool(handoff_reason)
+
+        if handoff_reason == "draft_confirmed":
+            # 从 trip_planner 交接：客户刚确认了行程 → 跳过 LEAD
+            draft_ctx = _load_draft_from_handoff(handoff, state)
+            has_draft = True
+            pipeline = {
+                "stage": STAGE_QUALIFIED, "followup_count": 0,
+                "discount_offered": False,
+            }
+            # 创建 pipeline 记录
+            try:
+                from services.memory import MemoryManager
+                mm = MemoryManager()
+                await mm.upsert_pipeline(customer_id, {
+                    "stage": STAGE_QUALIFIED,
+                    "draft_id": handoff.get("draft_id", session_id),
+                    "destination": draft_ctx.get("destination", "") if draft_ctx else "",
+                    "days": draft_ctx.get("days") if draft_ctx else None,
+                    "pax": draft_ctx.get("pax") if draft_ctx else None,
+                    "budget": draft_ctx.get("budget", "") if draft_ctx else "",
+                })
+            except Exception as e:
+                logger.warning("Failed to create pipeline from handoff: %s", e)
+        elif handoff_reason == "re_purchase_request":
+            # 从 ops 交接：用户想加购 → 有行程 + 有订单
+            draft_ctx = _load_draft_from_handoff(handoff, state)
+            has_draft = True
+            pipeline = {
+                "stage": STAGE_QUALIFIED, "followup_count": 0,
+                "discount_offered": False,
+            }
+        else:
+            # 正常流程
+            draft_ctx = _build_draft_context(state)
+            has_draft = draft_ctx is not None
+            pipeline = await self._load_pipeline(customer_id, state, draft_ctx)
 
         current_stage = pipeline.get("stage", STAGE_LEAD)
         has_unconverted = state.get("has_unconverted_trip", False)
@@ -305,21 +377,57 @@ class SalesAgent(BaseAgent):
         except Exception as e:
             logger.warning("Failed to save pipeline: %s", e)
 
-        # ── 第 11 步：构建返回 ──
+        # ── 第 11 步：构建返回（v4: 含 journey_stage + next_agent）──
         quote_text = ""
         if "报价" in final_text or "费用" in final_text:
             quote_text = final_text[:500]
 
-        return {
-            "final_reply": final_text,
-            "need_human": need_human,
-            "sales_pipeline_stage": new_stage,
-            "goto_planner": goto_planner,
-            "quote": quote_text,
-            "intent_level": self._stage_to_intent(new_stage),
-            "next_action": self._stage_to_action(new_stage),
-            "has_unconverted_trip": has_unconverted,
-        }
+        # 确定交接字段
+        if new_stage == STAGE_WON:
+            journey_stage = "post_purchase"
+            next_agent = "operations_agent"
+            hc = {
+                "reason": "payment_completed",
+                "from_agent": "sales_agent",
+                "order_summary": f"{draft_ctx.get('destination', '')}{draft_ctx.get('days', '')}天" if draft_ctx else "",
+            }
+            # 尝试提取订单号
+            import re as _re
+            order_match = _re.search(r'ORD-[\w-]+', final_text)
+            if order_match:
+                hc["order_id"] = order_match.group(0)
+        elif goto_planner:
+            journey_stage = "planning"
+            next_agent = "trip_planner"
+            hc = {
+                "reason": "trip_modify_requested",
+                "from_agent": "sales_agent",
+                "draft_summary": (draft_ctx.get("itinerary_summary", "") if draft_ctx else ""),
+                "draft_id": session_id,
+            }
+        elif new_stage == STAGE_LOST:
+            journey_stage = "discovery"
+            next_agent = ""
+            hc = {}
+        else:
+            journey_stage = "sales"
+            next_agent = "sales_agent"
+            hc = {}
+
+        return self._build_response(
+            final_reply=final_text,
+            journey_stage=journey_stage,
+            next_agent=next_agent,
+            handoff_context=hc,
+            need_human=need_human,
+            intent_level=self._stage_to_intent(new_stage),
+            next_action=self._stage_to_action(new_stage),
+            current_branch="sales_agent",
+            quote=quote_text,
+            sales_pipeline_stage=new_stage,
+            goto_planner=goto_planner,
+            has_unconverted_trip=has_unconverted,
+        )
 
     # =========================================================================
     # Pipeline 加载
@@ -485,15 +593,16 @@ class SalesAgent(BaseAgent):
     def _empty_reply(self, stage: str, has_draft: bool, followup_msg: str) -> dict:
         """无用户消息时的兜底回复"""
         if followup_msg:
-            # 有跟进消息时生成一个自然开场
-            return {
-                "final_reply": "欢迎回来！有什么旅行相关的问题需要我协助吗？",
-                "need_human": False,
-                "sales_pipeline_stage": stage,
-                "goto_planner": False,
-                "intent_level": self._stage_to_intent(stage),
-                "next_action": self._stage_to_action(stage),
-            }
+            return self._build_response(
+                final_reply="欢迎回来！有什么旅行相关的问题需要我协助吗？",
+                journey_stage="sales",
+                next_agent="sales_agent",
+                current_branch="sales_agent",
+                sales_pipeline_stage=stage,
+                goto_planner=False,
+                intent_level=self._stage_to_intent(stage),
+                next_action=self._stage_to_action(stage),
+            )
 
         if stage == STAGE_LEAD:
             text = "您好！我是您的专属旅行顾问。想去哪里旅行？我帮您规划最合适的方案！"
@@ -502,14 +611,16 @@ class SalesAgent(BaseAgent):
         else:
             text = "您好！有什么旅行相关的需求需要我协助吗？"
 
-        return {
-            "final_reply": text,
-            "need_human": False,
-            "sales_pipeline_stage": stage,
-            "goto_planner": False,
-            "intent_level": self._stage_to_intent(stage),
-            "next_action": self._stage_to_action(stage),
-        }
+        return self._build_response(
+            final_reply=text,
+            journey_stage="sales",
+            next_agent="sales_agent",
+            current_branch="sales_agent",
+            sales_pipeline_stage=stage,
+            goto_planner=False,
+            intent_level=self._stage_to_intent(stage),
+            next_action=self._stage_to_action(stage),
+        )
 
     # =========================================================================
     # 阶段 → 意向/动作 映射

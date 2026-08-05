@@ -34,7 +34,11 @@ def _normalize_result(result: ScorerResult, revision_count: int) -> dict:
 
 
 def intent_scorer(state: AgentState) -> dict:
-    """根据用户最新消息和行程草案评估客户意向（同步）"""
+    """根据用户最新消息和行程草案评估客户意向（同步）
+
+    v4: accept 时设置 journey_stage="sales" + next_agent="sales_agent"，
+    让下一轮自动进入销售流程。
+    """
     messages = state.get("messages", [])
     user_feedback = ""
     if messages:
@@ -42,6 +46,7 @@ def intent_scorer(state: AgentState) -> dict:
         user_feedback = last.content if hasattr(last, "content") else str(last)
 
     draft = state.get("draft", {})
+    need = state.get("need", {}) or {}
     revision_count = state.get("revision_count", 0)
     itinerary = draft.get("itinerary_md", "")[:600]
 
@@ -74,23 +79,53 @@ def intent_scorer(state: AgentState) -> dict:
             },
         ])
         normalized = _normalize_result(result, revision_count)
-        return {
-            **normalized,
-            "agent_traces": [{
-                "agent": "intent_scorer",
-                "action": "scored_intent",
-                "outcome": f"level={normalized['intent_level']}, action={normalized['next_action']}",
-                "confidence": normalized["intent_level"],
-            }],
-        }
-
     except Exception:
-        return {
-            "intent_level": "high", "next_action": "accept",
-            "agent_traces": [{
-                "agent": "intent_scorer",
-                "action": "scored_intent",
-                "outcome": "fallback: high/accept",
-                "confidence": "low",
-            }],
-        }
+        normalized = {"intent_level": "high", "next_action": "accept"}
+
+    # ── v4: accept 时设置交接字段 ──
+    response: dict = {
+        **normalized,
+        "agent_traces": [{
+            "agent": "intent_scorer",
+            "action": "scored_intent",
+            "outcome": f"level={normalized['intent_level']}, action={normalized['next_action']}",
+            "confidence": normalized["intent_level"],
+        }],
+    }
+
+    if normalized["next_action"] == "accept":
+        # 构建行程摘要供销售 Agent 使用
+        dest = need.get("destination", "")
+        days = need.get("days", 0)
+        pax = need.get("pax", 0)
+        budget = need.get("budget", "")
+        theme = need.get("theme", "")
+
+        draft_summary_parts = [f"{dest}{days}日游" if dest and days else ""]
+        if theme:
+            draft_summary_parts.append(f"偏好{theme}")
+        draft_summary_parts = [p for p in draft_summary_parts if p]
+
+        response.update({
+            "journey_stage": "sales",
+            "next_agent": "sales_agent",
+            "handoff_context": {
+                "reason": "draft_confirmed",
+                "from_agent": "trip_planner",
+                "draft_summary": "、".join(draft_summary_parts) if draft_summary_parts else "行程已确认",
+                "draft_id": state.get("session_id", ""),
+                "pipeline_stage": "qualified",
+                "destination": dest,
+                "days": days,
+                "pax": pax,
+                "budget": budget,
+                "theme": theme,
+                "itinerary_md": itinerary,
+            },
+        })
+    else:
+        # revise / give_up → 保持在 planning 阶段
+        response["journey_stage"] = "planning"
+        response["next_agent"] = "trip_planner"
+
+    return response

@@ -1,4 +1,4 @@
-"""定制节点——图节点薄层包装（异步版）"""
+"""定制节点——图节点薄层包装（异步版，v4 透传 journey_stage）"""
 
 from graph.state import AgentState
 from agents.trip_planner import get_trip_planner_agent
@@ -20,6 +20,8 @@ async def trip_planner(state: AgentState) -> dict:
         "draft": draft,
         "final_reply": result.get("final_reply", ""),
         "current_branch": result.get("current_branch", "trip_planner"),
+        "journey_stage": result.get("journey_stage", "planning"),
+        "next_agent": result.get("next_agent", "trip_planner"),
         "agent_traces": [{
             "agent": "trip_planner",
             "action": "generated_draft" if has_draft else "asked_missing_fields",

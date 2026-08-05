@@ -1,19 +1,13 @@
-"""运营 Agent——用户与产品的桥梁（Phase 21 重写）
+"""运营 Agent——用户与产品的桥梁（Phase 22 更新）
 
-覆盖场景：
-- 产品查询：搜索酒店/航班/门票/导游
-- 订单管理：查看/跟踪/取消/变更
-- 行中保障：诊断问题、协调资源
-- 售后工单：投诉/退款/赔付
-
-核心设计：
-- 单 Prompt + 场景识别（不拆分阶段 Prompt）
-- 工具作为平台共享能力层（trip_planner/sales 也可调用）
-- 成交接管：WON 时主动生成接管消息
-- 紧急升级：安全事故/重大投诉立即转人工
+v4: Journey Stage 驱动的多 Agent 协作
+- 接收 sales_agent WON 交接 → 生成接管消息
+- 回流转检测 → 加购回 sales / 改行程回 trip_planner
+- 紧急升级不受影响
 """
 
 import json
+import re
 import logging
 from agents.base import BaseAgent
 from graph.state import AgentState
@@ -35,6 +29,30 @@ from services.llm import get_light_llm
 from prompts import load_prompt
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# 回流转检测关键词
+# =============================================================================
+
+# 用户想改行程 → 回定制
+_RETURN_TO_PLANNER = [
+    r"帮我.*(?:改|调整|修|换).*(?:行程|路线|安排|景点)",
+    r"(?:再加|多去|增加|添加).*(?:天|城市|景点|目的地)",
+    r"(?:换个|改个|调整一下)(?:行程|路线|方案)",
+    r"重新.*(?:设计|规划|排)",
+    r"想去.*(?:北京|西安|上海|成都|广州|桂林|杭州|重庆|昆明|拉萨|三亚|大理|丽江|张家界)",
+    r"(?:调整|修改|改|更新).*(?:行程|路线|方案|安排)",
+]
+
+# 用户想加购 → 回销售
+_RETURN_TO_SALES = [
+    r"还(?:想|要|需要).*(?:买|订|加|订一|再订)",
+    r"(?:再加|加订|追加|多订).*(?:酒店|机票|门票|导游|服务|项目)",
+    r"(?:续住|延长|升级).*(?:酒店|房间)",
+    r"帮我.*(?:加|订|升级).*(?:酒店|机票|门票|导游|房间|服务)",
+    r"这个.*(?:行程|方案).*(?:怎么买|多少钱|价格|报价)",
+    r"帮我.*(?:报价|算.*(?:价|钱|费用)|多少钱)",
+]
 
 
 class OperationsAgent(BaseAgent):
@@ -61,12 +79,16 @@ class OperationsAgent(BaseAgent):
         customer_id = state.get("customer_id", "unknown")
         session_id = state.get("session_id", "")
 
+        # ── 第 0 步：检查交接上下文（v4: 从 sales_agent WON 交接过来了）──
+        handoff = self._get_handoff_context(state)
+        handoff_reason = handoff.get("reason", "")
+        is_payment_handoff = handoff_reason == "payment_completed" or state.get("sales_pipeline_stage") == "won"
+
         # ── 第 1 步：加载活跃订单 ──
         active_order = await self._load_active_order(customer_id)
 
-        # ── 第 2 步：检测是否刚成交（WON → 接管） ──
-        is_handoff = state.get("sales_pipeline_stage") == "won"
-        if is_handoff:
+        # ── 第 2 步：成交接管消息 ──
+        if is_payment_handoff:
             handoff_msg = self._build_handoff_message(active_order)
         else:
             handoff_msg = ""
@@ -76,7 +98,13 @@ class OperationsAgent(BaseAgent):
 
         # ── 第 4 步：空消息兜底 ──
         if not user_msg:
-            return self._empty_reply(active_order, is_handoff, handoff_msg)
+            return self._empty_reply(active_order, is_payment_handoff, handoff_msg)
+
+        # ── 第 4.5 步：回流转检测（v4）──
+        if not is_payment_handoff:
+            reroute = self._detect_reroute(user_msg, active_order)
+            if reroute:
+                return reroute
 
         # ── 第 5 步：LLM + Tool Calling ──
         history = self._get_message_history(state, max_turns=5)
@@ -98,14 +126,17 @@ class OperationsAgent(BaseAgent):
         # ── 第 8 步：构建订单上下文 ──
         order_context = self._build_order_context(active_order)
 
-        # ── 第 9 步：构建返回 ──
-        return {
-            "final_reply": final_text,
-            "need_human": need_human,
-            "order_context": order_context,
-            "intent_level": "high" if need_human else "mid",
-            "next_action": "accept",
-        }
+        # ── 第 9 步：构建返回（v4: 含 journey_stage）──
+        return self._build_response(
+            final_reply=final_text,
+            journey_stage="post_purchase",
+            next_agent="operations_agent",
+            need_human=need_human,
+            current_branch="operations_agent",
+            order_context=order_context,
+            intent_level="high" if need_human else "mid",
+            next_action="accept",
+        )
 
     # =========================================================================
     # 订单加载
@@ -197,9 +228,14 @@ class OperationsAgent(BaseAgent):
         if handoff_msg:
             ctx["交接指令"] = handoff_msg
 
-        # 是否有刚成交的状态
-        if state.get("sales_pipeline_stage") == "won":
+        # 是否有刚成交的状态（v4: 兼容新旧两种检测方式）
+        handoff_ctx = state.get("handoff_context", {}) or {}
+        if state.get("sales_pipeline_stage") == "won" or handoff_ctx.get("reason") == "payment_completed":
             ctx["刚成交"] = True
+            if handoff_ctx.get("order_id"):
+                ctx["订单编号"] = handoff_ctx["order_id"]
+            if handoff_ctx.get("order_summary"):
+                ctx["订单摘要"] = handoff_ctx["order_summary"]
 
         return ctx if ctx else None
 
@@ -239,13 +275,65 @@ class OperationsAgent(BaseAgent):
         else:
             text = "您好！我是运营专员，有什么运营相关的问题需要处理吗？比如查询订单、搜索酒店机票、或者行程中遇到什么问题？"
 
-        return {
-            "final_reply": text,
-            "need_human": False,
-            "order_context": self._build_order_context(active_order),
-            "intent_level": "mid",
-            "next_action": "accept",
-        }
+        return self._build_response(
+            final_reply=text,
+            journey_stage="post_purchase",
+            next_agent="operations_agent",
+            current_branch="operations_agent",
+            order_context=self._build_order_context(active_order),
+            intent_level="mid",
+            next_action="accept",
+        )
+
+    # =========================================================================
+    # 回流转检测（v4）
+    # =========================================================================
+
+    def _detect_reroute(self, user_msg: str, active_order: dict | None) -> dict | None:
+        """检测用户是否想从运营阶段回流转到定制或销售。
+
+        Returns:
+            dict 若检测到则返回旅程变更；None 表示不触发回流转。
+        """
+        # 改行程 → 回定制
+        for pattern in _RETURN_TO_PLANNER:
+            if re.search(pattern, user_msg):
+                return self._build_response(
+                    final_reply="好的！我帮您联系行程定制专家来处理。",
+                    journey_stage="planning",
+                    next_agent="trip_planner",
+                    handoff_context={
+                        "reason": "trip_modify_requested",
+                        "from_agent": "operations_agent",
+                        "current_order_id": active_order.get("order_id", "") if active_order else "",
+                    },
+                    need_human=False,
+                    current_branch="operations_agent",
+                    intent_level="mid",
+                    next_action="accept",
+                )
+
+        # 加购 → 回销售
+        for pattern in _RETURN_TO_SALES:
+            if re.search(pattern, user_msg):
+                return self._build_response(
+                    final_reply="好的！我帮您联系销售顾问来协助加购。",
+                    journey_stage="sales",
+                    next_agent="sales_agent",
+                    handoff_context={
+                        "reason": "re_purchase_request",
+                        "from_agent": "operations_agent",
+                        "current_order_id": active_order.get("order_id", "") if active_order else "",
+                        "destination": active_order.get("destination", "") if active_order else "",
+                        "days": active_order.get("days", 0) if active_order else 0,
+                    },
+                    need_human=False,
+                    current_branch="operations_agent",
+                    intent_level="high",
+                    next_action="revise",
+                )
+
+        return None
 
     # =========================================================================
     # 紧急升级

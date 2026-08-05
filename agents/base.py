@@ -190,6 +190,52 @@ class BaseAgent(ABC):
         return f"[Unknown Tool] {tool_name} not found"
 
     # =========================================================================
+    # v4: 标准化返回构建 + 交接上下文提取
+    # =========================================================================
+
+    @staticmethod
+    def _build_response(
+        final_reply: str,
+        journey_stage: str = "discovery",
+        next_agent: str = "",
+        handoff_context: dict | None = None,
+        need_human: bool = False,
+        handoff: dict | None = None,
+        intent_level: str = "",
+        next_action: str = "",
+        current_branch: str = "",
+        **kwargs,
+    ) -> dict:
+        """构建标准化的 Agent 返回 dict。
+
+        各 Agent 子类在 run() 最后调用此方法，确保返回格式一致。
+        除了明确列出的字段，其他字段通过 **kwargs 传入（如 quote, draft, need, goto_planner 等）。
+        """
+        result: dict = {
+            "final_reply": final_reply,
+            "journey_stage": journey_stage,
+            "next_agent": next_agent,
+            "handoff_context": handoff_context or {},
+            "need_human": need_human,
+            "handoff": handoff or {},
+            "intent_level": intent_level,
+            "next_action": next_action,
+        }
+        if current_branch:
+            result["current_branch"] = current_branch
+        result.update(kwargs)
+        return result
+
+    def _get_handoff_context(self, state: AgentState) -> dict:
+        """从 State 中提取交接上下文（若有）。
+
+        上一个 Agent 通过 handoff_context 传递的信息，
+        本 Agent 在 run() 开头调用此方法获取。
+        """
+        ctx = state.get("handoff_context", {}) or {}
+        return ctx
+
+    # =========================================================================
     # 消息提取工具
     # =========================================================================
 

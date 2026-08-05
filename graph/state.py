@@ -20,7 +20,9 @@
 | sales_pipeline_stage | sales_agent | after_sales, session_context |
 | sales_context | sales_agent | sales_agent（跨会话） |
 | has_unconverted_trip + previous_draft_id | session_context | intent_router, sales_agent |
-| goto_planner | sales_agent | after_sales |
+| goto_planner | sales_agent | after_sales（🟡 deprecated，迁移到 next_agent） |
+| 🆕 journey_stage + next_agent | 各 Agent 交接时 | route_decision, builder |
+| 🆕 handoff_context | 各 Agent 交接时 | 下一个 Agent run() |
 | has_active_order + active_order_id | session_context | intent_router, operations_agent |
 | order_context | operations_agent | operations_agent |
 | need_human + handoff | 需转人工的 Agent | route_decision, human_handoff |
@@ -84,6 +86,21 @@ class HandoffContext(TypedDict, total=False):
     summary: str              # 简短摘要（1-2 句话）
 
 
+class AgentHandoff(TypedDict, total=False):
+    """Agent 间交接上下文——一个 Agent 完成工作后，传给下一个 Agent 的信息。
+
+    替代之前分散的 goto_planner / sales_pipeline_stage 等 flag 模式。
+    每个 Agent 在返回时声明 next_agent + handoff_context，图路由据此分发。
+    """
+    reason: str               # 交接原因: "draft_confirmed" | "payment_completed" | "trip_modify_requested" | "re_purchase_request"
+    from_agent: str           # 来源 Agent: "trip_planner" | "sales_agent" | "operations_agent"
+    draft_summary: str        # 行程摘要文字
+    draft_id: str             # 行程方案 session_id
+    pipeline_stage: str       # 销售子阶段（可选，如 "qualified"，用于跳过 LEAD）
+    order_id: str             # 订单号（WON 交接时）
+    order_summary: str        # 订单摘要（WON 交接时）
+
+
 class AgentTrace(TypedDict, total=False):
     """单个 Agent 的执行审计记录——追加到 agent_traces 列表"""
     agent: str                # "intent_router" | "trip_planner" | "customer_service" | ...
@@ -138,12 +155,17 @@ class AgentState(MessagesState):
     intent_level: str         # 意向等级（owner: intent_scorer(定制流) / sales_agent(销售流)）
     next_action: str          # 下一步动作（owner: intent_scorer(定制流) / sales_agent(销售流)）
 
+    # ====== 🆕 旅程阶段——跨 Agent 共享（owner: 各 Agent 在交接时写入）======
+    journey_stage: str         # "discovery" | "planning" | "sales" | "post_purchase"
+    next_agent: str            # Agent 声明下一站: "trip_planner" | "sales_agent" | "operations_agent" | "customer_service"
+    handoff_context: dict      # AgentHandoff — 交接上下文，下一个 Agent 据此初始化
+
     # ====== 销售 Pipeline（owner: sales_agent）======
     sales_pipeline_stage: str  # lead/qualified/negotiation/closing/won/lost
     sales_context: dict        # {followup_count, discount_offered, last_stage_entered_at, ...}
     has_unconverted_trip: bool # 是否有未转化的行程方案（session_context 写入）
     previous_draft_id: str     # 上一份行程方案标识（session_context 写入）
-    goto_planner: bool         # 销售中用户要求修改行程 → 路由到 trip_planner
+    goto_planner: bool         # 销售中用户要求修改行程 → 路由到 trip_planner（🟡 保留兼容，逐步迁移到 next_agent）
 
     # ====== 运营——订单与桥梁（owner: operations_agent）======
     has_active_order: bool     # 是否有进行中的订单（session_context 写入）→ 路由加权

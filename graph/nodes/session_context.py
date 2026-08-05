@@ -47,6 +47,10 @@ async def session_context(state: AgentState) -> dict:
         "handoff": state.get("handoff", {}),
         "agent_traces": state.get("agent_traces", []),
         "branch_history": state.get("branch_history", []),
+        # v4: Journey Stage 字段
+        "journey_stage": state.get("journey_stage", "discovery"),
+        "next_agent": state.get("next_agent", ""),
+        "handoff_context": state.get("handoff_context", {}),
         # 🧠 记忆字段
         "user_profile": state.get("user_profile", {}),
         "user_preferences": state.get("user_preferences", {}),

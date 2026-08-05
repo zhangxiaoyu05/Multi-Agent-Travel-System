@@ -1,4 +1,7 @@
-"""运营节点——图节点薄层包装（异步版，Phase 21 更新）"""
+"""运营节点——图节点薄层包装（异步版，Phase 22 更新）
+
+v4: 透传 journey_stage / next_agent / handoff_context
+"""
 
 from graph.state import AgentState
 from agents.operations_agent import get_operations_agent
@@ -40,6 +43,10 @@ async def operations_agent(state: AgentState) -> dict:
         "handoff": handoff,
         "order_context": result.get("order_context", {}),
         "current_branch": "operations_agent",
+        # v4: 透传 journey 字段
+        "journey_stage": result.get("journey_stage", "post_purchase"),
+        "next_agent": result.get("next_agent", "operations_agent"),
+        "handoff_context": result.get("handoff_context", {}),
         "agent_traces": [{
             "agent": "operations_agent",
             "action": action,

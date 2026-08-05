@@ -178,6 +178,8 @@ class TripPlannerAgent(BaseAgent):
             return {
                 "need": existing_need,
                 "final_reply": "您好！请告诉我您的出行需求（目的地、天数、日期、人数、预算），我来为您定制专属行程。",
+                "journey_stage": "planning",
+                "next_agent": "trip_planner",
             }
 
         # Step 1: 提取需求字段
@@ -287,6 +289,8 @@ class TripPlannerAgent(BaseAgent):
             },
             "final_reply": full_content,
             "current_branch": "trip_planner",
+            "journey_stage": "planning",
+            "next_agent": "trip_planner",
         }
 
     # =========================================================================
@@ -521,6 +525,8 @@ class TripPlannerAgent(BaseAgent):
             "need": need,
             "final_reply": "\n".join(lines),
             "current_branch": "trip_planner",
+            "journey_stage": "planning",
+            "next_agent": "trip_planner",
         }
 
 

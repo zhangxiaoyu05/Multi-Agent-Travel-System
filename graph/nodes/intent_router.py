@@ -2,11 +2,13 @@
 
 v2: 整合对话历史 + current_branch 上下文，避免跟进消息被误路由。
 v3: 预过滤器——能力询问/简单寒暄等高频误判模式，跳过 LLM 直接路由到客服。
+v4: Journey Stage 感知——非 discovery 阶段降级为打断检测，不再调用 LLM。
 """
 
 import re
 from pydantic import BaseModel, Field
 from graph.state import AgentState
+from graph.conditions.route_decision import _build_stage_scores
 from services.llm import get_router_llm
 from prompts import load_prompt
 
@@ -120,6 +122,140 @@ def _prefilter_user_message(user_text: str) -> dict | None:
     return None
 
 
+# =============================================================================
+# v4: 打断检测——非 discovery 阶段的用户意图跳变检测
+# =============================================================================
+
+# 投诉/退款——打断销售的绝对信号
+_COMPLAINT_INTERRUPT_PATTERNS = [
+    r"我要投诉",
+    r"我想投诉",
+    r"我要退款",
+    r"给我退款",
+    r"要求退款",
+    r"找你们领导",
+    r"叫.*(?:领导|经理|负责人)",
+    r"(?:太|很|非常|特别)(?:差|烂|坑|糟糕)",
+    r"骗子",
+    r"坑人",
+    r"诈骗",
+    r"报警",
+    r"凭什么.*(?:不退|不给退|拒绝退款)",
+]
+
+# 运营相关——在定制/销售阶段提订单/付款
+_OP_INTERRUPT_PATTERNS = [
+    r"我的订单",
+    r"付款.*(?:怎么|确认|了吗)",
+    r"(?:订单|酒店).*确认",
+    r"支付.*(?:问题|失败|成功)",
+    r"退款.*进度",
+    r"行程.*(?:取消|退款)",
+    r"改签",
+    r"联系.*导游",
+    r"航班.*(?:取消|延误|改)",
+]
+
+# 定制/销售相关——在运营阶段提新行程
+_REENGAGE_PATTERNS = [
+    r"想去.*(?:北京|西安|上海|成都|广州|桂林|杭州|重庆|昆明|拉萨|三亚|大理|丽江|张家界)",
+    r"(?:设计|规划|安排).*(?:行程|路线|方案)",
+    r"换个(?:地方|城市|目的地)",
+    r"新(?:行程|方案)",
+    r"再.*(?:去|设计|规划)",
+    r"(?:调整|修改|改|更新).*(?:行程|路线|方案|安排)",
+]
+
+# 加购——在运营阶段想继续消费
+_REPURCHASE_PATTERNS = [
+    r"还想(?:买|订|加|去)",
+    r"加购",
+    r"再加.*(?:一个|个|一项|项)",
+    r"多订",
+    r"(?:续住|延长|加天)",
+    r"(?:再加|多去).*(?:天|个|城市|景点)",
+    r"加(?:一个|个|一|点).*(?:酒店|机票|房间|导游|项目|服务)",
+    r"帮我.*(?:加|订|升级|安排).*(?:酒店|机票|房间|导游|服务|项目|门票)",
+    r"帮我.*(?:报价|算.*(?:价|钱|费用)|多少钱)",
+]
+
+
+def _detect_interrupt(user_text: str, stage: str, state: AgentState) -> dict | None:
+    """检测非 discovery 阶段的用户意图跳变。
+
+    根据当前 journey_stage，判断用户是否想跳转到其他阶段。
+
+    Returns:
+        dict 若检测到打断则返回 State 更新；None 表示无打断，保持当前阶段。
+    """
+    text = user_text.strip()
+
+    # ── 通用：投诉/退款在任何阶段都可能是打断 ──
+    for pattern in _COMPLAINT_INTERRUPT_PATTERNS:
+        if re.search(pattern, text):
+            return {
+                "need_human": True,
+                "handoff": {
+                    "from_agent": "intent_router",
+                    "reason": "complaint" if "投诉" in text else "escalation",
+                    "priority": "urgent",
+                    "summary": f"用户在 {stage} 阶段触发投诉/退款打断：{text[:120]}",
+                },
+            }
+
+    # ── planning/sales 阶段 → 运营打断 ──
+    if stage in ("planning", "sales"):
+        for pattern in _OP_INTERRUPT_PATTERNS:
+            if re.search(pattern, text):
+                return {
+                    "journey_stage": "post_purchase",
+                    "next_agent": "operations_agent",
+                    "intent_scores": _build_stage_scores("post_purchase"),
+                    "need_human": False,
+                    "agent_traces": [{
+                        "agent": "intent_router",
+                        "action": "stage_interrupt",
+                        "outcome": f"{stage} → post_purchase (运营打断)",
+                        "confidence": "high",
+                    }],
+                }
+
+    # ── post_purchase 阶段 → 定制/销售回流转 ──
+    if stage == "post_purchase":
+        # 新行程 → 定制
+        for pattern in _REENGAGE_PATTERNS:
+            if re.search(pattern, text):
+                return {
+                    "journey_stage": "planning",
+                    "next_agent": "trip_planner",
+                    "intent_scores": _build_stage_scores("planning"),
+                    "need_human": False,
+                    "agent_traces": [{
+                        "agent": "intent_router",
+                        "action": "stage_interrupt",
+                        "outcome": "post_purchase → planning (新行程打断)",
+                        "confidence": "high",
+                    }],
+                }
+        # 加购 → 销售
+        for pattern in _REPURCHASE_PATTERNS:
+            if re.search(pattern, text):
+                return {
+                    "journey_stage": "sales",
+                    "next_agent": "sales_agent",
+                    "intent_scores": _build_stage_scores("sales"),
+                    "need_human": False,
+                    "agent_traces": [{
+                        "agent": "intent_router",
+                        "action": "stage_interrupt",
+                        "outcome": "post_purchase → sales (加购打断)",
+                        "confidence": "high",
+                    }],
+                }
+
+    return None
+
+
 class IntentResult(BaseModel):
     """LLM 意图路由的结构化输出 Schema"""
     service: float = Field(default=0.0, ge=0.0, le=1.0, description="客服意图概率")
@@ -157,8 +293,9 @@ def _build_context_messages(messages: list, max_count: int = _CONTEXT_WINDOW) ->
 def intent_router(state: AgentState) -> dict:
     """分析用户消息，输出意图分数和转人工判断（同步，无异步调用）
 
-    与 v1 的关键区别：把对话历史 + current_branch 传给 LLM，
-    让模型知道"用户正在一个定制流程中补充信息"，而非独立判断。
+    v4: Journey Stage 感知。
+    - discovery 阶段：完整 LLM 意图分类（含预过滤器）
+    - 非 discovery 阶段：打断检测，无打断则透传阶段对应的 intent_scores
     """
     messages = state.get("messages", [])
     if not messages:
@@ -169,22 +306,21 @@ def intent_router(state: AgentState) -> dict:
 
     if not user_text or not user_text.strip():
         return {
-            "intent_scores": {"service": 1.0, "sales": 0.0, "operations": 0.0, "planner": 0.0},
+            "intent_scores": _build_stage_scores(state.get("journey_stage", "discovery")),
             "need_human": False,
         }
 
-    # ---- 预过滤器：明确的简单意图跳过 LLM（v3） ----
+    journey_stage = state.get("journey_stage", "discovery")
+
+    # ── 通用：预过滤器（能力询问/寒暄，所有阶段生效）──
     prefilter_result = _prefilter_user_message(user_text)
     if prefilter_result is not None:
-        # Phase 20: 即使匹配预过滤器，如果有未转化行程也提高 sales 权重
         if state.get("has_unconverted_trip"):
             prefilter_result["intent_scores"]["sales"] = 0.3
-            # 重新归一化
             total = sum(prefilter_result["intent_scores"].values())
             if total > 0:
                 for k in prefilter_result["intent_scores"]:
                     prefilter_result["intent_scores"][k] /= total
-        # Phase 21: 有活跃订单时提高 operations 权重
         if state.get("has_active_order"):
             prefilter_result["intent_scores"]["operations"] = 0.3
             total = sum(prefilter_result["intent_scores"].values())
@@ -193,11 +329,28 @@ def intent_router(state: AgentState) -> dict:
                     prefilter_result["intent_scores"][k] /= total
         return prefilter_result
 
-    # ---- 构建上下文 ----
+    # ── v4: 非 discovery 阶段——打断检测 ──
+    if journey_stage != "discovery":
+        interrupt = _detect_interrupt(user_text, journey_stage, state)
+        if interrupt:
+            return interrupt
+
+        # 无打断 → 保持当前阶段，透传阶段对应的 intent_scores
+        return {
+            "intent_scores": _build_stage_scores(journey_stage),
+            "need_human": False,
+            "agent_traces": [{
+                "agent": "intent_router",
+                "action": "stage_keep",
+                "outcome": f"journey_stage={journey_stage}, no interrupt",
+                "confidence": "high",
+            }],
+        }
+
+    # ── discovery 阶段：完整 LLM 意图分类 ──
     current_branch = state.get("current_branch", "")
     history = _build_context_messages(messages)
 
-    # 把上下文信息嵌入 system prompt
     system_prompt = load_prompt("intent_router.txt")
     if current_branch:
         system_prompt += (
@@ -208,7 +361,6 @@ def intent_router(state: AgentState) -> dict:
     llm = get_router_llm()
     structured_llm = llm.with_structured_output(IntentResult)
 
-    # 组合调用：system + 历史 + 最新消息
     invoke_messages = [{"role": "system", "content": system_prompt}]
     invoke_messages.extend(history)
 
@@ -222,7 +374,6 @@ def intent_router(state: AgentState) -> dict:
 
     handoff = {}
     if result.need_human:
-        # 优先级判断：明确的投诉/退款关键词 → urgent；其他 → normal
         is_urgent = _has_complaint_intent(user_text)
         handoff = {
             "from_agent": "intent_router",
@@ -238,16 +389,15 @@ def intent_router(state: AgentState) -> dict:
         "planner": result.planner,
     }
 
-    # Phase 20: 有未转化的行程方案时，给 sales 加权
+    # 有未转化的行程方案时，给 sales 加权
     if state.get("has_unconverted_trip"):
         scores["sales"] = scores["sales"] * 1.5
-        # 重新归一化
         total = sum(scores.values())
         if total > 0:
             for k in scores:
                 scores[k] /= total
 
-    # Phase 21: 有活跃订单时，给 operations 加权
+    # 有活跃订单时，给 operations 加权
     if state.get("has_active_order"):
         scores["operations"] = scores.get("operations", 0.1) * 1.5
         total = sum(scores.values())
@@ -255,14 +405,25 @@ def intent_router(state: AgentState) -> dict:
             for k in scores:
                 scores[k] /= total
 
+    # discovery 阶段也设置初始 journey_stage（供 route_decision 使用）
+    top_key = max(scores, key=scores.get)
+    stage_map = {
+        "planner": "planning",
+        "sales": "sales",
+        "operations": "post_purchase",
+        "service": "discovery",
+    }
+    initial_stage = stage_map.get(top_key, "discovery")
+
     return {
         "intent_scores": scores,
         "need_human": result.need_human,
         "handoff": handoff,
+        "journey_stage": initial_stage,
         "agent_traces": [{
             "agent": "intent_router",
             "action": "classified",
-            "outcome": f"planner={result.planner:.2f}, service={result.service:.2f}",
+            "outcome": f"planner={result.planner:.2f}, service={result.service:.2f}, stage={initial_stage}",
             "confidence": "high" if max(
                 result.service, result.sales, result.operations, result.planner
             ) > 0.5 else "low",

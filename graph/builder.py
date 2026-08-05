@@ -1,13 +1,10 @@
-"""LangGraph 图构建——Phase 7+
+"""LangGraph 图构建——Phase 22 旅程驱动多 Agent 协作
 
-组装所有节点和边，编译为可执行的 StateGraph。
-
-Checkpoint 后端：
-    - 生产：MySQLSaver（MySQL 8.0，服务重启不丢失会话）
-    - 开发：MemorySaver（进程内，调试用）
-
-环境变量：
-    CHECKPOINT_BACKEND=mysql（默认）| memory
+v4: Journey Stage 驱动的路由架构。
+- journey_stage 决定主路径（planning → sales → post_purchase）
+- intent_router 在 discovery 阶段做意图分类，在其他阶段做打断检测
+- Agent 间通过 next_agent + handoff_context 接力
+- 三个 Agent 出口统一为 _agent_exit（need_human / next_agent / sync）
 
 完整图结构：
     START → input_guard → session_context → query_rewrite → intent_router
@@ -16,10 +13,10 @@ Checkpoint 后端：
          ▼            ▼            ▼                                   ▼                      ▼
   customer_service  sales   operations_agent                  trip_planner             human_handoff
          │            │            │           │        ▲                       │
-         ├─ after_svc ├─ after_sls │           ├─ requirements_complete         │
-         │  ├→ handoff│  ├→ ops_sync│           │   ├→ intent_scorer           │
-         │  ├→ router │  ├→ handoff│           │   └→ END                     │
-         │  └→ END    │  └→ END    │           │                                │
+         ├─ _agt_exit ├─ _agt_exit │           ├─ requirements_complete         │
+         │  ├→ handoff│  ├→ handoff│           │   ├→ intent_scorer           │
+         │  ├→ router │  ├→ router │           │   └→ END                     │
+         │  └→ op_sync│  └→ op_sync│           │                                │
          │            │            │           └→ intent_scorer               │
          │            │            │               │                            │
          │            │            │               ├─ revision_decision         │
@@ -52,7 +49,6 @@ from graph.nodes.intent_scorer import intent_scorer
 from graph.nodes.revision_loop import revision_loop
 from graph.nodes.human_handoff import human_handoff
 from graph.nodes.operations_sync import operations_sync
-from graph.nodes.operations_handoff import operations_handoff
 from graph.nodes.sales_agent import sales_agent
 from graph.nodes.operations_agent import operations_agent as ops_agent_node
 
@@ -116,7 +112,6 @@ def build_graph(checkpointer=None):
 
     # Phase 5
     builder.add_node("operations_sync", operations_sync)
-    builder.add_node("operations_handoff", operations_handoff)  # Phase 21: WON接管
 
     # Phase 6
     builder.add_node("sales_agent", sales_agent)
@@ -144,36 +139,35 @@ def build_graph(checkpointer=None):
         }
     )
 
-    # 客服分支
+    # 客服分支（v4: 统一出口）
     builder.add_conditional_edges(
         "customer_service",
-        after_service,
+        _agent_exit,
         {
             "human_handoff": "human_handoff",
-            "intent_router": "route_decision",  # v3: 回到路由节点
-            "end": END,
+            "intent_router": "route_decision",  # 回到路由节点
+            "operations_sync": "operations_sync",
         }
     )
 
-    # 销售分支
+    # 销售分支（v4: 统一出口，不再硬编码 trip_planner/operations_handoff）
     builder.add_conditional_edges(
         "sales_agent",
-        after_sales,
+        _agent_exit,
         {
-            "operations_sync": "operations_sync",
-            "operations_handoff": "operations_handoff",  # Phase 21: WON → 运营接管
             "human_handoff": "human_handoff",
-            "trip_planner": "trip_planner",   # Phase 20: 销售中修改行程
-            "end": END,
+            "intent_router": "route_decision",  # 回到路由节点（含交接场景）
+            "operations_sync": "operations_sync",
         }
     )
 
-    # 运营分支
+    # 运营分支（v4: 统一出口，支持回流转到销售/定制）
     builder.add_conditional_edges(
         "operations_agent",
-        _after_operations,
+        _agent_exit,
         {
             "human_handoff": "human_handoff",
+            "intent_router": "route_decision",  # 回到路由节点（含回流转场景）
             "operations_sync": "operations_sync",
         }
     )
@@ -204,7 +198,6 @@ def build_graph(checkpointer=None):
 
     # 人工接管 → 终态写入 → END
     builder.add_edge("human_handoff", "operations_sync")
-    builder.add_edge("operations_handoff", "operations_sync")  # Phase 21: WON接管后也经过 sync
     builder.add_edge("operations_sync", END)
 
     # ====== 编译 ======
@@ -213,11 +206,42 @@ def build_graph(checkpointer=None):
 
 
 # =============================================================================
-# 运营分支条件边
+# v4: 统一的 Agent 出口条件边（替代 after_service / after_sales / _after_operations）
 # =============================================================================
 
-def _after_operations(state: AgentState) -> str:
-    """运营节点出口条件"""
+_AGENT_TO_BRANCH = {
+    "trip_planner": "trip_planner",
+    "sales_agent": "sales_agent",
+    "operations_agent": "operations_agent",
+    "customer_service": "customer_service",
+}
+
+
+def _agent_exit(state: AgentState) -> str:
+    """统一的 Agent 出口条件——所有业务 Agent 共用。
+
+    决策优先级：
+        1. need_human → human_handoff（转人工接管）
+        2. next_agent 指向不同的 Agent → intent_router（交接给下一个 Agent）
+        3. 默认 → operations_sync（同步数据，结束本轮）
+
+    关键：仅当 next_agent 与 current_branch 不同时才重路由，防止同一 Agent 循环。
+    """
+    # 优先级 1：转人工
     if state.get("need_human"):
         return "human_handoff"
+
+    # 优先级 2：Agent 声明了不同下一站 → 回到路由管线
+    next_agent = state.get("next_agent", "")
+    current_branch = state.get("current_branch", "")
+    if next_agent and next_agent in _AGENT_TO_BRANCH:
+        next_branch = _AGENT_TO_BRANCH[next_agent]
+        if next_branch != current_branch:
+            return "intent_router"
+
+    # 优先级 3：结束本轮
     return "operations_sync"
+
+
+# 🟡 deprecated: 保留兼容别名，逐步替换
+_after_operations = _agent_exit

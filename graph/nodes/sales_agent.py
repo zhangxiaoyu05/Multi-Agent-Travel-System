@@ -1,9 +1,6 @@
-"""销售节点——图节点薄层包装（Phase 20 重写）
+"""销售节点——图节点薄层包装（Phase 22 更新）
 
-适配新的 SalesAgent 返回结构：
-- sales_pipeline_stage: 当前 Pipeline 阶段
-- goto_planner: 是否要跳转到 trip_planner 修改行程
-- quote: 结构化报价文本
+v4: 透传 journey_stage / next_agent / handoff_context
 """
 
 from graph.state import AgentState
@@ -51,6 +48,10 @@ async def sales_agent(state: AgentState) -> dict:
         "intent_level": result.get("intent_level", "mid"),
         "next_action": result.get("next_action", "revise"),
         "current_branch": "sales_agent",
+        # v4: 透传 journey 字段
+        "journey_stage": result.get("journey_stage", "sales"),
+        "next_agent": result.get("next_agent", "sales_agent"),
+        "handoff_context": result.get("handoff_context", {}),
         "agent_traces": [{
             "agent": "sales_agent",
             "action": action,
