@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id             VARCHAR(64) NOT NULL COMMENT '用户 ID',
     preferred_destinations JSON      COMMENT '感兴趣的目的地列表 ["北京","西安"]',
-    budget_range        VARCHAR(32)           COMMENT '预算范围 "$1000-2000/人"',
+    budget_range        VARCHAR(128)          COMMENT '预算范围 JSON {"min":1000,"max":3000,"currency":"USD"}',
     travel_style        VARCHAR(20)           COMMENT '节奏偏好 轻松/适中/紧凑',
     interests           JSON                  COMMENT '兴趣主题 ["历史文化","美食"]',
     travel_companion    VARCHAR(20)           COMMENT '同行人 solo/family/couple/friends',
@@ -175,7 +175,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 
     -- 深度旅行偏好（用户确认后长期保存）
     preferred_destinations JSON,
-    budget_range         VARCHAR(32),
+    budget_range         VARCHAR(128),
     travel_style         VARCHAR(20),
     interests            JSON,
     travel_companion     VARCHAR(20),

@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-05（Phase 21-续-4 E2E 全功能测试——4 个 Bug 修复 + MCP 死锁/角色映射/画像/数据库表）
+> 最后更新：2026-08-05（Phase 21-续-5 E2E 续测——默认路由/运营/删除/画像/语言 + Bug #5 修复）
 
 ---
 
@@ -1390,4 +1390,5 @@ Chrome DevTools E2E 测试通过：
 | 2026-08-05 | Phase 21-续-2：LIGHT_MODEL 修复——① 销售 Agent（6 tools）和运营 Agent（12 tools）调用 qwen-turbo 时 API 返回 400 → 根因是 qwen-turbo 不支持多工具 function calling；② `get_light_llm()` 默认模型从 `qwen-turbo` 改为 `qwen-plus`（代码默认 + `.env` 显式配置）；③ `.env.example` 补全 LIGHT_MODEL/LIGHT_TEMPERATURE/LIGHT_MAX_TOKENS 文档；④ `ainvoke()` 新增详细错误日志（记录 API 响应体便于排查）；⑤ ⚠️ 需重启后端使配置生效 | ✅ |
 | 2026-08-05 | Phase 21-续-3：E2E 测试 3 项修复——① P0 西班牙语回复中文：`customer_service.py` 最终回答指令改为 7 语言感知（zh/en/es/ja/ko/hi/ar）+ 投诉关键词扩展为 7 语言；② P1 Profile 页面路由冲突：API 端点 `/profile*` → `/api/profile*`（GET/PUT/suggestions），新增 `GET /profile` 返回 HTML 页面，`profile.html` API 路径同步，`index.html` 侧边栏画像链接更新；③ P1 ROUTER_MODEL 不一致：`.env` 中 `ROUTER_MODEL` 从 `qwen-turbo` 修正为 `qwen-plus`（与 `.env.example` 对齐）；④ `services/llm.py` 新增 `reset_all_singletons()` 免重启切换 + `_build_body()` 调试日志；⑤ `api/main.py` 启动日志新增 LIGHT_MODEL 行；⑥ 5 文件修改，243 测试通过 | ✅ |
 | 2026-08-05 | Phase 21-续-4：Chrome DevTools E2E 全功能测试 + 4 个 Bug 修复——① P0 MCP Server 死锁：`MCPServerConnection` 的 `start()` 和 `_send_request()` 共用一个非可重入 asyncio.Lock → 拆分为 `_lifecycle_lock` + `_request_lock`；② P1 Profile Pydantic 验证错误：Redis 缓存中 `budget_range` 为脏字符串 → API 端点加 sanitization + 清除 Redis 缓存；③ P1 销售/运营 Agent 400 错误：`_langchain_role()` 中 `msg.type="human"` 未映射为 `"user"` → 添加 type 映射表；④ P2 数据库缺表：已有 volume 缺少 Phase 20-21 新增的 `sales_pipeline`/`orders`/`tickets` 表 → 手动执行 DDL 创建；⑤ 测试覆盖：模式切换/语言切换/智能客服FAQ/投诉转人工/西班牙语/行程定制SSE/打断/销售Pipeline/用户画像 全部通过；⑥ 3 文件修改 + 2 项手动操作，243 测试通过 | ✅ |
+| 2026-08-05 | Phase 21-续-5：E2E 续测（默认路由/运营/删除/画像/语言） + Bug #5 修复——① P1 budget_range 列过短：`user_profiles.budget_range` VARCHAR(32) 存不下 JSON `{"min":1000,"max":3000,"currency":"USD"}`（45字符）→ ALTER TABLE 扩至 VARCHAR(128) + 同步更新 `migrate_mysql.sql` 两处定义；② 测试通过：默认自动路由→行程定制(95%)、运营处理→转人工交接单、对话删除（悬停✕→确认弹窗→成功）、用户画像编辑（修复后保存成功）、English 语言切换（Agent 英文回复）、模式视觉区分（5 模式独立 emoji/标题/placeholder）；③ 1 文件修改 + 1 项手动 DB 操作 | ✅ |
 
