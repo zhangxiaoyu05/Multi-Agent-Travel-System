@@ -376,9 +376,9 @@ const Profile = {
 
   async init() {
     try {
-      this._data = await api('GET', '/profile');
+      this._data = await api('GET', '/api/profile');
       try {
-        this._suggestions = await api('GET', '/profile/suggestions');
+        this._suggestions = await api('GET', '/api/profile/suggestions');
       } catch (e) {
         this._suggestions = [];
       }
@@ -557,7 +557,7 @@ const Profile = {
     };
 
     try {
-      await api('PUT', '/profile', body);
+      await api('PUT', '/api/profile', body);
       showToast('画像已保存 ✓');
       setTimeout(() => window.location.reload(), 500);
     } catch (e) {
@@ -567,7 +567,7 @@ const Profile = {
 
   async acceptAll() {
     try {
-      await api('POST', '/profile/suggestions/accept');
+      await api('POST', '/api/profile/suggestions/accept');
       showToast('AI 建议已采纳 ✓');
       setTimeout(() => window.location.reload(), 500);
     } catch (e) {
@@ -577,7 +577,7 @@ const Profile = {
 
   async rejectAll() {
     try {
-      await api('POST', '/profile/suggestions/reject');
+      await api('POST', '/api/profile/suggestions/reject');
       showToast('建议已忽略');
       setTimeout(() => window.location.reload(), 500);
     } catch (e) {

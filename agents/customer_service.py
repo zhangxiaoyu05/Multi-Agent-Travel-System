@@ -74,10 +74,20 @@ class CustomerServiceAgent(BaseAgent):
             system_content += f"\n\n## 当前用户画像\n\n{ctx_str}"
 
         # 注入原始用户问题（让 LLM 明确知道要回答什么）
+        # 指令随语言变化，确保非中文场景下 LLM 以目标语言回答
+        _lang_instructions = {
+            "zh": "请基于以上知识库检索结果和用户画像，回答用户的问题。如果知识库内容足以回答问题，请直接引用；如果不够，请诚实说明并提供替代建议。",
+            "en": "Answer the user's question based on the knowledge base results above. If the KB content is sufficient, quote it directly; if not, be honest and provide alternative suggestions. You MUST respond in English.",
+            "ja": "上記のナレッジベース検索結果に基づいて、ユーザーの質問に日本語で回答してください。",
+            "ko": "위의 지식 베이스 검색 결과를 바탕으로 사용자의 질문에 한국어로 답변하세요.",
+            "hi": "कृपया ऊपर दिए गए ज्ञान आधार परिणामों के आधार पर उपयोगकर्ता के प्रश्न का उत्तर हिंदी में दें।",
+            "es": "Responde la pregunta del usuario basándote en los resultados de la base de conocimiento anteriores. Si el contenido es suficiente, cítalo directamente; si no, sé honesto y ofrece sugerencias alternativas. DEBES responder en español.",
+            "ar": "أجب عن سؤال المستخدم باللغة العربية بناءً على نتائج قاعدة المعرفة أعلاه.",
+        }
+        _instr = _lang_instructions.get(language, _lang_instructions["zh"])
         system_content += (
             f"\n\n## 用户原始问题\n\n{user_msg}"
-            f"\n\n请基于以上知识库检索结果和用户画像，回答用户的问题。"
-            f"如果知识库内容足以回答问题，请直接引用；如果不够，请诚实说明并提供替代建议。"
+            f"\n\n{_instr}"
         )
 
         # =====================================================================
@@ -125,9 +135,17 @@ class CustomerServiceAgent(BaseAgent):
                             push_token(session_id, chunk)
 
         # =====================================================================
-        # Step 4: 投诉关键词后处理
+        # Step 4: 投诉关键词后处理（多语言）
         # =====================================================================
-        complaint_keywords = ["投诉", "退款", "骗人", "诈骗", "差评"]
+        complaint_keywords = [
+            "投诉", "退款", "骗人", "诈骗", "差评",           # 中文
+            "complaint", "refund", "scam", "fraud", "cheat",  # 英文
+            "queja", "reembolso", "estafa", "fraude",         # 西班牙语
+            "苦情", "返金", "詐欺",                           # 日语
+            "불만", "환불", "사기",                           # 韩语
+            "शिकायत", "धोखाधड़ी",                             # 印地语
+            "شكوى", "استرداد", "احتيال",                      # 阿拉伯语
+        ]
         for kw in complaint_keywords:
             if kw in user_msg:
                 need_human = True

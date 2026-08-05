@@ -239,6 +239,9 @@ class BailianLLM:
         }
         if tools:
             body["tools"] = tools
+            # Debug: log model + tool count for diagnosing 400 errors
+            logger.debug(f"LLM call: model={self.model}, tools={len(tools)}, "
+                         f"tool_names={[t['function']['name'] for t in tools[:3]]}...")
         if tool_choice:
             body["tool_choice"] = tool_choice
         return body
@@ -486,6 +489,26 @@ def _pydantic_to_tool_definition(schema: type[BaseModel]) -> dict:
 _router_llm: BailianLLM | None = None
 _agent_llm: BailianLLM | None = None
 _light_llm: BailianLLM | None = None
+
+
+def reset_all_singletons():
+    """重置所有模块级 LLM 单例（用于配置变更后无需重启进程）。
+
+    调用后会强制 get_light_llm / get_router_llm / get_agent_llm
+    在下次调用时重新创建 BailianLLM 实例，读取最新的环境变量/默认值。
+    """
+    global _router_llm, _agent_llm, _light_llm
+    if _light_llm:
+        try:
+            import asyncio
+            asyncio.get_event_loop().create_task(_light_llm.aclose())
+        except Exception:
+            pass
+    _router_llm = None
+    _agent_llm = None
+    _light_llm = None
+    import logging
+    logging.getLogger(__name__).info("LLM singletons reset — will recreate on next call")
 
 
 def _get_api_key() -> str:

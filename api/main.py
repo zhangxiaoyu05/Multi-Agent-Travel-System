@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     """应用启动/关闭时的初始化与清理"""
     # ---- 启动 ----
     logger.info("=" * 50)
-    logger.info("入境定制游 AI Agent 启动中...")
+    logger.info("入境定制游 AI Agent 启动中... (LIGHT_MODEL=qwen-plus)")
     logger.info("=" * 50)
 
     # MySQL
@@ -224,6 +224,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("应用启动完成 ✓")
     logger.info(f"  LLM Router:  {os.getenv('ROUTER_MODEL', 'qwen-plus')}")
+    logger.info(f"  LLM Light:   {os.getenv('LIGHT_MODEL', 'qwen-plus')}")
     logger.info(f"  LLM Agent:   {os.getenv('AGENT_MODEL', 'qwen3-max')}")
     logger.info(f"  Embedding:   {os.getenv('EMBEDDING_MODEL', 'text-embedding-v4')}")
     logger.info(f"  Checkpoint:  {os.getenv('CHECKPOINT_BACKEND', 'mysql')}")
@@ -343,6 +344,15 @@ async def root():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return {"message": "前端页面未找到，请访问 /docs 查看 API 文档", "version": "0.3.0"}
+
+
+@app.get("/profile")
+async def profile_page():
+    """返回用户画像页面"""
+    profile_path = os.path.join(_static_dir, "profile.html")
+    if os.path.isfile(profile_path):
+        return FileResponse(profile_path)
+    return {"message": "画像页面未找到", "version": "0.3.0"}
 
 
 @app.get("/health")
@@ -962,7 +972,7 @@ async def chat_stream(req: ChatRequest, user: dict = Depends(get_current_user)):
 # =============================================================================
 
 
-@app.get("/profile", response_model=UserProfileResponse)
+@app.get("/api/profile", response_model=UserProfileResponse)
 async def get_profile(user: dict = Depends(get_current_user)):
     """获取当前用户的完整画像（含 LLM 建议）"""
     try:
@@ -988,7 +998,7 @@ async def get_profile(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"获取画像失败: {str(e)}")
 
 
-@app.put("/profile", response_model=UserProfileResponse)
+@app.put("/api/profile", response_model=UserProfileResponse)
 async def update_profile(
     req: UserProfileUpdateRequest,
     user: dict = Depends(get_current_user),
@@ -1034,7 +1044,7 @@ async def update_profile(
         raise HTTPException(status_code=500, detail=f"更新画像失败: {str(e)}")
 
 
-@app.get("/profile/suggestions", response_model=list[PendingUpdateResponse])
+@app.get("/api/profile/suggestions", response_model=list[PendingUpdateResponse])
 async def get_pending_suggestions(user: dict = Depends(get_current_user)):
     """获取 LLM 建议的待确认画像更新"""
     try:
@@ -1065,7 +1075,7 @@ async def get_pending_suggestions(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"获取建议失败: {str(e)}")
 
 
-@app.post("/profile/suggestions/accept")
+@app.post("/api/profile/suggestions/accept")
 async def accept_suggestions(user: dict = Depends(get_current_user)):
     """采纳所有 LLM 建议——合并到画像主字段"""
     try:
@@ -1092,7 +1102,7 @@ async def accept_suggestions(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"采纳建议失败: {str(e)}")
 
 
-@app.post("/profile/suggestions/reject")
+@app.post("/api/profile/suggestions/reject")
 async def reject_suggestions(user: dict = Depends(get_current_user)):
     """拒绝所有 LLM 建议——清空 suggested_fields"""
     try:
