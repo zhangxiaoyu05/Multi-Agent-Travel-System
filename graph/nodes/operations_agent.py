@@ -1,4 +1,4 @@
-"""运营节点——图节点薄层包装（异步版）"""
+"""运营节点——图节点薄层包装（异步版，Phase 21 更新）"""
 
 from graph.state import AgentState
 from agents.operations_agent import get_operations_agent
@@ -23,15 +23,27 @@ async def operations_agent(state: AgentState) -> dict:
             "summary": "运营问题需升级到人工处理",
         }
 
+    # 确定 action 和 outcome
+    if need_human:
+        action = "escalated"
+        outcome = "handoff_to_human"
+    elif result.get("order_context", {}).get("order_id"):
+        action = "handled_order"
+        outcome = "order_processed"
+    else:
+        action = "handled_ops"
+        outcome = "resolved"
+
     return {
         "final_reply": final_reply,
         "need_human": need_human,
         "handoff": handoff,
+        "order_context": result.get("order_context", {}),
         "current_branch": "operations_agent",
         "agent_traces": [{
             "agent": "operations_agent",
-            "action": "handled_ops" if not need_human else "escalated",
-            "outcome": "resolved" if not need_human else "handoff_to_human",
+            "action": action,
+            "outcome": outcome,
             "confidence": "high" if not need_human else "mid",
         }],
     }

@@ -294,6 +294,191 @@ def create_order(draft_id: str, quote_ref: str = "", notes: str = "") -> str:
     return _mcp_call("create_order", {"draft_id": draft_id, "quote_ref": quote_ref, "notes": notes}, _mock)
 
 
+# =============================================================================
+# Phase 21: 运营工具——产品查询 + 订单管理 + 工单
+# =============================================================================
+
+
+@tool
+def search_hotels(city: str, check_in: str = "", check_out: str = "",
+                  pax: int = 1) -> str:
+    """搜索目的地酒店，返回可用酒店列表及价格和库存状态。
+
+    Args:
+        city: 城市名称
+        check_in: 入住日期 YYYY-MM-DD
+        check_out: 离店日期 YYYY-MM-DD
+        pax: 人数
+
+    Returns:
+        酒店列表文本
+    """
+    def _mock(city, check_in="", check_out="", pax=1):
+        from tools.mock_operations import search_hotels as mock_fn
+        return mock_fn.invoke({"city": city, "check_in": check_in, "check_out": check_out, "pax": pax})
+    return _mcp_call("search_hotels", {"city": city, "check_in": check_in, "check_out": check_out, "pax": pax}, _mock)
+
+
+@tool
+def search_flights(origin: str = "", destination: str = "", date: str = "",
+                   pax: int = 1) -> str:
+    """搜索国内航班，返回可用航班列表及价格和余票状态。
+
+    Args:
+        origin: 出发城市
+        destination: 到达城市
+        date: 出发日期 YYYY-MM-DD
+        pax: 人数
+
+    Returns:
+        航班列表文本
+    """
+    def _mock(origin="", destination="", date="", pax=1):
+        from tools.mock_operations import search_flights as mock_fn
+        return mock_fn.invoke({"origin": origin, "destination": destination, "date": date, "pax": pax})
+    return _mcp_call("search_flights", {"origin": origin, "destination": destination, "date": date, "pax": pax}, _mock)
+
+
+@tool
+def search_tickets(city: str, type: str = "", date: str = "",
+                   pax: int = 1) -> str:
+    """搜索目的地门票和活动，返回可用门票列表及价格和时段。
+
+    Args:
+        city: 城市名称
+        type: 门票类型筛选（可选）
+        date: 游玩日期 YYYY-MM-DD
+        pax: 人数
+
+    Returns:
+        门票/活动列表文本
+    """
+    def _mock(city, type="", date="", pax=1):
+        from tools.mock_operations import search_tickets as mock_fn
+        return mock_fn.invoke({"city": city, "type": type, "date": date, "pax": pax})
+    return _mcp_call("search_tickets", {"city": city, "type": type, "date": date, "pax": pax}, _mock)
+
+
+@tool
+def search_guides(city: str, language: str = "中文", date: str = "") -> str:
+    """搜索目的地导游，返回可用导游列表及语言、专长和价格。
+
+    Args:
+        city: 城市名称
+        language: 需要的语言（默认"中文"）
+        date: 服务日期 YYYY-MM-DD
+
+    Returns:
+        导游列表文本
+    """
+    def _mock(city, language="中文", date=""):
+        from tools.mock_operations import search_guides as mock_fn
+        return mock_fn.invoke({"city": city, "language": language, "date": date})
+    return _mcp_call("search_guides", {"city": city, "language": language, "date": date}, _mock)
+
+
+@tool
+def get_order(order_id: str) -> str:
+    """查询单个订单的详细信息及供应商确认状态。
+
+    Args:
+        order_id: 订单编号
+
+    Returns:
+        订单详情文本
+    """
+    def _mock(order_id):
+        from tools.mock_operations import get_order as mock_fn
+        return mock_fn.invoke({"order_id": order_id})
+    return _mcp_call("get_order", {"order_id": order_id}, _mock)
+
+
+@tool
+def list_orders(user_id: str) -> str:
+    """列出用户的所有订单摘要。
+
+    Args:
+        user_id: 用户 ID
+
+    Returns:
+        订单摘要列表文本
+    """
+    def _mock(user_id):
+        from tools.mock_operations import list_orders as mock_fn
+        return mock_fn.invoke({"user_id": user_id})
+    return _mcp_call("list_orders", {"user_id": user_id}, _mock)
+
+
+@tool
+def cancel_order(order_id: str, reason: str = "") -> str:
+    """取消订单，计算退款金额。
+
+    Args:
+        order_id: 订单编号
+        reason: 取消原因
+
+    Returns:
+        取消确认文本
+    """
+    def _mock(order_id, reason=""):
+        from tools.mock_operations import cancel_order as mock_fn
+        return mock_fn.invoke({"order_id": order_id, "reason": reason})
+    return _mcp_call("cancel_order", {"order_id": order_id, "reason": reason}, _mock)
+
+
+@tool
+def modify_order(order_id: str, changes: str = "") -> str:
+    """修改订单内容（改期、加人、减人、更换酒店等）。
+
+    Args:
+        order_id: 订单编号
+        changes: 变更内容描述
+
+    Returns:
+        变更确认文本
+    """
+    def _mock(order_id, changes=""):
+        from tools.mock_operations import modify_order as mock_fn
+        return mock_fn.invoke({"order_id": order_id, "changes": changes})
+    return _mcp_call("modify_order", {"order_id": order_id, "changes": changes}, _mock)
+
+
+@tool
+def create_ticket(user_id: str, type: str, description: str,
+                  order_id: str = "") -> str:
+    """创建售后工单（投诉、退款申请、改期申请等）。
+
+    Args:
+        user_id: 用户 ID
+        type: 工单类型（complaint/refund/modification/inquiry/emergency）
+        description: 问题描述
+        order_id: 关联订单号（可选）
+
+    Returns:
+        工单创建确认文本
+    """
+    def _mock(user_id, type, description, order_id=""):
+        from tools.mock_operations import create_ticket as mock_fn
+        return mock_fn.invoke({"user_id": user_id, "type": type, "description": description, "order_id": order_id})
+    return _mcp_call("create_ticket", {"user_id": user_id, "type": type, "description": description, "order_id": order_id}, _mock)
+
+
+@tool
+def check_ticket(ticket_id: str) -> str:
+    """查询工单处理进度。
+
+    Args:
+        ticket_id: 工单编号
+
+    Returns:
+        工单状态文本
+    """
+    def _mock(ticket_id):
+        from tools.mock_operations import check_ticket as mock_fn
+        return mock_fn.invoke({"ticket_id": ticket_id})
+    return _mcp_call("check_ticket", {"ticket_id": ticket_id}, _mock)
+
+
 @tool
 def send_capi(event_type: str, event_data: str) -> str:
     """上报转化事件到广告平台（Meta/Google/TikTok）。

@@ -35,10 +35,10 @@ def after_sales(state: AgentState) -> str:
     if state.get("goto_planner"):
         return "trip_planner"
 
-    # 优先级 3：成交 → 终态写入
+    # 优先级 3：成交 → 运营接管
     stage = state.get("sales_pipeline_stage", "")
     if stage == "won":
-        return "operations_sync"
+        return "operations_handoff"
 
     # 优先级 4：流失 → end
     if stage == "lost":

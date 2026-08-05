@@ -52,6 +52,7 @@ from graph.nodes.intent_scorer import intent_scorer
 from graph.nodes.revision_loop import revision_loop
 from graph.nodes.human_handoff import human_handoff
 from graph.nodes.operations_sync import operations_sync
+from graph.nodes.operations_handoff import operations_handoff
 from graph.nodes.sales_agent import sales_agent
 from graph.nodes.operations_agent import operations_agent as ops_agent_node
 
@@ -115,6 +116,7 @@ def build_graph(checkpointer=None):
 
     # Phase 5
     builder.add_node("operations_sync", operations_sync)
+    builder.add_node("operations_handoff", operations_handoff)  # Phase 21: WON接管
 
     # Phase 6
     builder.add_node("sales_agent", sales_agent)
@@ -159,6 +161,7 @@ def build_graph(checkpointer=None):
         after_sales,
         {
             "operations_sync": "operations_sync",
+            "operations_handoff": "operations_handoff",  # Phase 21: WON → 运营接管
             "human_handoff": "human_handoff",
             "trip_planner": "trip_planner",   # Phase 20: 销售中修改行程
             "end": END,
@@ -201,6 +204,7 @@ def build_graph(checkpointer=None):
 
     # 人工接管 → 终态写入 → END
     builder.add_edge("human_handoff", "operations_sync")
+    builder.add_edge("operations_handoff", "operations_sync")  # Phase 21: WON接管后也经过 sync
     builder.add_edge("operations_sync", END)
 
     # ====== 编译 ======

@@ -184,6 +184,13 @@ def intent_router(state: AgentState) -> dict:
             if total > 0:
                 for k in prefilter_result["intent_scores"]:
                     prefilter_result["intent_scores"][k] /= total
+        # Phase 21: 有活跃订单时提高 operations 权重
+        if state.get("has_active_order"):
+            prefilter_result["intent_scores"]["operations"] = 0.3
+            total = sum(prefilter_result["intent_scores"].values())
+            if total > 0:
+                for k in prefilter_result["intent_scores"]:
+                    prefilter_result["intent_scores"][k] /= total
         return prefilter_result
 
     # ---- 构建上下文 ----
@@ -235,6 +242,14 @@ def intent_router(state: AgentState) -> dict:
     if state.get("has_unconverted_trip"):
         scores["sales"] = scores["sales"] * 1.5
         # 重新归一化
+        total = sum(scores.values())
+        if total > 0:
+            for k in scores:
+                scores[k] /= total
+
+    # Phase 21: 有活跃订单时，给 operations 加权
+    if state.get("has_active_order"):
+        scores["operations"] = scores.get("operations", 0.1) * 1.5
         total = sum(scores.values())
         if total > 0:
             for k in scores:

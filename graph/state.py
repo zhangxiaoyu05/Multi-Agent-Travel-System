@@ -21,6 +21,8 @@
 | sales_context | sales_agent | sales_agent（跨会话） |
 | has_unconverted_trip + previous_draft_id | session_context | intent_router, sales_agent |
 | goto_planner | sales_agent | after_sales |
+| has_active_order + active_order_id | session_context | intent_router, operations_agent |
+| order_context | operations_agent | operations_agent |
 | need_human + handoff | 需转人工的 Agent | route_decision, human_handoff |
 | final_reply | 各 Agent | API 层 |
 | agent_traces | 所有 Agent（追加） | 调试/监控 |
@@ -142,6 +144,11 @@ class AgentState(MessagesState):
     has_unconverted_trip: bool # 是否有未转化的行程方案（session_context 写入）
     previous_draft_id: str     # 上一份行程方案标识（session_context 写入）
     goto_planner: bool         # 销售中用户要求修改行程 → 路由到 trip_planner
+
+    # ====== 运营——订单与桥梁（owner: operations_agent）======
+    has_active_order: bool     # 是否有进行中的订单（session_context 写入）→ 路由加权
+    active_order_id: str       # 当前活跃订单 ID（session_context 写入）
+    order_context: dict        # {order_id, status, items_summary, trip_start, trip_end}
 
     # ====== 输出 ======
     final_reply: str          # 面向用户的最终回复

@@ -293,10 +293,11 @@ class TestAfterSales:
         state = {"need_human": False, "goto_planner": True}
         assert after_sales(state) == "trip_planner"
 
-    def test_won_to_operations_sync(self):
+    def test_won_to_operations_handoff(self):
+        """Phase 21: WON 应路由到 operations_handoff（运营接管）而非直接 operations_sync"""
         from graph.conditions.after_sales import after_sales
         state = {"need_human": False, "goto_planner": False, "sales_pipeline_stage": "won"}
-        assert after_sales(state) == "operations_sync"
+        assert after_sales(state) == "operations_handoff"
 
     def test_lost_to_end(self):
         from graph.conditions.after_sales import after_sales

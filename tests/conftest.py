@@ -156,6 +156,44 @@ def operations_state() -> dict:
     }
 
 
+@pytest.fixture
+def operations_with_order_state() -> dict:
+    """运营场景——有活跃订单的状态（Phase 21）"""
+    return {
+        "messages": [HumanMessage(content="我的订单怎么样了？")],
+        "session_id": "test-ops-o-01",
+        "customer_id": "cust-ops-o-01",
+        "channel": "web",
+        "language": "zh",
+        "has_active_order": True,
+        "active_order_id": "ORD-20260805120000-ABC123",
+        "intent_scores": {"service": 0.05, "sales": 0.05, "operations": 0.85, "planner": 0.05},
+        "current_branch": "operations",
+    }
+
+
+@pytest.fixture
+def operations_won_state() -> dict:
+    """销售刚成交的状态——用于测试运营接管（Phase 21）"""
+    return {
+        "messages": [HumanMessage(content="")],
+        "session_id": "test-ops-won-01",
+        "customer_id": "cust-ops-won-01",
+        "channel": "web",
+        "language": "zh",
+        "sales_pipeline_stage": "won",
+        "final_reply": "恭喜！订单已创建 ORD-20260805-A1B2C3，请点击支付链接完成支付。",
+        "need": {"destination": "北京", "days": 3, "pax": 2, "budget": "¥5000/人"},
+        "draft": {
+            "version": 1,
+            "itinerary_md": "## 北京三日游\n\n### Day 1\n故宫-天安门\n\n### Day 2\n长城-十三陵\n\n### Day 3\n颐和园-圆明园",
+            "estimated_cost": "¥4800/人",
+        },
+        "intent_scores": {"service": 0.05, "sales": 0.85, "operations": 0.05, "planner": 0.05},
+        "current_branch": "sales",
+    }
+
+
 # =============================================================================
 # Mock fixtures
 # =============================================================================

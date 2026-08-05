@@ -18,13 +18,15 @@ FAQ / 转人工  5阶段销售   入驻/履约/工单  修订循环             
      │    ┌─────┤           │              ├─ goto_planner ──→ trip_planner     │
      │    │     │           │              │  (Phase 20: 销售中修改行程)        │
      │    ▼     ▼           ▼              ▼                                    │
-     ├─ human_handoff   operations_sync ←──┤                                    │
+     ├─ human_handoff   operations_handoff  ←──┤  (Phase 21: WON 运营接管)      │
      │        │              │                                                  │
      └────────╋──────────────┼──────────────────────────────────────────────────│
               ▼              ▼                                                  ▼
          operations_sync ←──────────────────────────────────────────────────────┘
          (终态：CRM + CAPI 写入)
 ```
+
+> 💡 **运营 Agent 重设计（Phase 21）**：运营重新定位为"用户与产品的桥梁"——① 10 个共享工具（产品查询 search_hotels/flights/tickets/guides + 订单管理 get_order/list_orders/cancel_order/modify_order + 工单 create_ticket/check_ticket）；② WON 成交后自动接管（operations_handoff 节点生成接管消息）；③ 活跃订单自动路由加权（has_active_order → operations ×1.5）；④ 产品查询工具作为平台共享能力层，trip_planner/sales 也可调用。
 
 > 💡 **共享黑板**：所有节点共用 `AgentState`，字段有明确 owner。新增 `handoff`（转人工上下文）、`agent_traces`（追加式审计日志）、`branch_history`（路径追踪）。分支切换时自动重置控制信号防止跨分支污染。
 > 
@@ -169,7 +171,7 @@ Multi_Agent/
 │   ├── sales_qualified.txt    # 🆕 销售 QUALIFIED 阶段 Prompt
 │   ├── sales_negotiation.txt  # 🆕 销售 NEGOTIATION 阶段 Prompt
 │   └── sales_closing.txt      # 🆕 销售 CLOSING 阶段 Prompt
-├── tests/                 # 单元测试（215 个用例）
+├── tests/                 # 单元测试（238 个用例）
 │   ├── conftest.py
 │   ├── test_state.py
 │   ├── test_graph.py
@@ -266,7 +268,7 @@ python -m api.main
 # → 访问 http://localhost:8000
 
 # 6. 运行测试
-python -m pytest tests/ -v          # 全部 193 个测试
+python -m pytest tests/ -v          # 全部 238 个测试
 python -m api.main test             # E2E 集成测试（12 组）
 python -m api.main test --quick     # 快速模式（跳过行程生成）
 ```
@@ -366,7 +368,7 @@ event: done            → {完整 ChatResponse}
 ## 测试
 
 ```bash
-# 运行全部 215 个单元测试（~12s，含异步测试 + auth/API/SSE + 记忆系统 + Pipeline）
+# 运行全部 238 个单元测试（~12s，含异步测试 + auth/API/SSE + 记忆系统 + Pipeline + 运营工具）
 python -m pytest tests/ -v
 
 # 运行端到端集成测试
@@ -455,6 +457,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 19 | 查询改写节点——主干链路插入 query_rewrite（session_context → query_rewrite → intent_router），LLM 纠错规范化（拼音→中文、中英混杂→统一中文、错别字修正），快速跳过机制（短确认+已规范中文免 LLM 调用），改写效果： "bei jing 3天 2 person" → "北京3天2人行程" | ✅ |
 | Phase 19-续 | 模型分层成本优化——三层架构（Light=qwen-turbo/Mid=qwen-plus/Heavy=qwen3-max），客服+运营 → qwen-turbo（↓~90% 费用），销售 → qwen-plus，行程保持 qwen3-max，新增 get_light_llm() 工厂，Agent 代码零改动 | ✅ |
 | Phase 20 | 销售 Agent 重设计——Pipeline 五阶段状态机（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST）+ 4 个分阶段 Prompt 动态加载 + 5 个新 Mock 销售工具 + 跟进策略（24h 温和→3d 优惠→7d 放弃）+ 行程修改检测（goto_planner→trip_planner→回销售）+ 新建 5 文件/重写 2 文件/修改 10 文件/删除 1 文件 | ✅ |
+| Phase 21 | 运营 Agent 重设计——用户与产品的桥梁：数据库 orders+tickets 表 + 10 个运营工具（产品查询×4 + 订单管理×4 + 工单×2）+ 工具即平台共享能力层（trip_planner/sales 也可调用）+ Agent 重写（12 工具 + WON 接管 + 紧急升级）+ operations_handoff 节点（销售成交运营自动接管）+ has_active_order 路由加权 + 新建 2 文件/重写 3 文件/修改 10 文件 + 238 测试全部通过 | ✅ |
 
 ## 许可证
 

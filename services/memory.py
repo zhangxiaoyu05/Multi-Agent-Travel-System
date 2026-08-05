@@ -799,8 +799,256 @@ class MemoryManager:
         return pipeline
 
     # =========================================================================
-    # 助手方法
+    # 订单——跟踪用户订单生命周期（Phase 21）
     # =========================================================================
+
+    async def create_order(self, user_id: str, data: dict) -> dict:
+        """创建新订单
+
+        Args:
+            user_id: 用户 ID
+            data: {order_id, draft_id, destination, days, pax, trip_start,
+                   trip_end, total_amount, currency, items, status}
+
+        Returns:
+            创建的订单 dict
+        """
+        import json as _json
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    INSERT INTO orders
+                        (order_id, user_id, draft_id, status, destination, days, pax,
+                         trip_start, trip_end, total_amount, currency, items)
+                    VALUES (:oid, :uid, :did, :status, :dest, :days, :pax,
+                            :tstart, :tend, :amount, :currency, :items)
+                """),
+                {
+                    "oid": data.get("order_id", ""),
+                    "uid": user_id,
+                    "did": data.get("draft_id", ""),
+                    "status": data.get("status", "pending_confirmation"),
+                    "dest": data.get("destination", ""),
+                    "days": data.get("days"),
+                    "pax": data.get("pax"),
+                    "tstart": data.get("trip_start"),
+                    "tend": data.get("trip_end"),
+                    "amount": data.get("total_amount", ""),
+                    "currency": data.get("currency", "¥"),
+                    "items": _json.dumps(data.get("items", []), ensure_ascii=False),
+                },
+            )
+        return await self.get_order(data.get("order_id", ""))
+
+    async def get_order(self, order_id: str) -> dict | None:
+        """按 order_id 查询订单
+
+        Returns:
+            order dict 或 None
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT * FROM orders WHERE order_id = :oid LIMIT 1"),
+                {"oid": order_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+            return self._row_to_order(row)
+
+    async def get_active_order(self, user_id: str) -> dict | None:
+        """获取用户当前活跃订单（status 不是 completed/cancelled）
+
+        Returns:
+            活跃的 order dict 或 None
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT * FROM orders
+                    WHERE user_id = :uid AND status NOT IN ('completed', 'cancelled')
+                    ORDER BY created_at DESC LIMIT 1
+                """),
+                {"uid": user_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+            return self._row_to_order(row)
+
+    async def list_orders(self, user_id: str, limit: int = 10) -> list[dict]:
+        """列出用户订单（按创建时间降序）
+
+        Returns:
+            订单列表
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT * FROM orders
+                    WHERE user_id = :uid
+                    ORDER BY created_at DESC
+                    LIMIT :lim
+                """),
+                {"uid": user_id, "lim": limit},
+            )
+            rows = result.mappings().all()
+            return [self._row_to_order(r) for r in rows]
+
+    async def update_order_status(self, order_id: str, status: str) -> None:
+        """更新订单状态
+
+        Args:
+            order_id: 订单号
+            status: 新状态
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    UPDATE orders SET status = :status, updated_at = NOW()
+                    WHERE order_id = :oid
+                """),
+                {"status": status, "oid": order_id},
+            )
+
+    def _row_to_order(self, row) -> dict:
+        """将 SQL 行转为 order dict"""
+        import json as _json
+        order = {
+            "id": row["id"],
+            "order_id": row["order_id"],
+            "user_id": row["user_id"],
+            "draft_id": row["draft_id"],
+            "status": row["status"],
+            "destination": row["destination"],
+            "days": row["days"],
+            "pax": row["pax"],
+            "trip_start": row["trip_start"].isoformat() if row["trip_start"] else "",
+            "trip_end": row["trip_end"].isoformat() if row["trip_end"] else "",
+            "total_amount": row["total_amount"],
+            "currency": row["currency"],
+            "paid_at": row["paid_at"].isoformat() if row["paid_at"] else None,
+            "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else "",
+        }
+        items = row["items"]
+        if items:
+            try:
+                order["items"] = _json.loads(items) if isinstance(items, str) else items
+            except (_json.JSONDecodeError, TypeError):
+                order["items"] = []
+        else:
+            order["items"] = []
+        return order
+
+    # =========================================================================
+    # 工单——跟踪售后处理（Phase 21）
+    # =========================================================================
+
+    async def create_ticket(self, user_id: str, data: dict) -> dict:
+        """创建新工单
+
+        Args:
+            user_id: 用户 ID
+            data: {ticket_id, order_id, type, priority, description}
+
+        Returns:
+            创建的工单 dict
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("""
+                    INSERT INTO tickets
+                        (ticket_id, user_id, order_id, type, priority, status, description)
+                    VALUES (:tid, :uid, :oid, :type, :priority, 'open', :desc)
+                """),
+                {
+                    "tid": data.get("ticket_id", ""),
+                    "uid": user_id,
+                    "oid": data.get("order_id", ""),
+                    "type": data.get("type", "inquiry"),
+                    "priority": data.get("priority", "normal"),
+                    "desc": data.get("description", ""),
+                },
+            )
+        return await self.get_ticket(data.get("ticket_id", ""))
+
+    async def get_ticket(self, ticket_id: str) -> dict | None:
+        """按 ticket_id 查询工单
+
+        Returns:
+            ticket dict 或 None
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT * FROM tickets WHERE ticket_id = :tid LIMIT 1"),
+                {"tid": ticket_id},
+            )
+            row = result.mappings().first()
+            if not row:
+                return None
+            return self._row_to_ticket(row)
+
+    async def list_tickets(self, user_id: str) -> list[dict]:
+        """列出用户工单（按创建时间降序）"""
+        engine = get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("""
+                    SELECT * FROM tickets
+                    WHERE user_id = :uid
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                """),
+                {"uid": user_id},
+            )
+            rows = result.mappings().all()
+            return [self._row_to_ticket(r) for r in rows]
+
+    async def update_ticket(self, ticket_id: str, data: dict) -> None:
+        """更新工单
+
+        Args:
+            ticket_id: 工单号
+            data: {status, resolution, resolved_at, ...}
+        """
+        engine = get_engine()
+        async with engine.begin() as conn:
+            set_clauses = ["updated_at = NOW()"]
+            params = {"tid": ticket_id}
+            for key in ("status", "resolution", "resolved_at"):
+                if key in data:
+                    set_clauses.append(f"{key} = :{key}")
+                    params[key] = data[key]
+            if set_clauses:
+                await conn.execute(
+                    text(f"UPDATE tickets SET {', '.join(set_clauses)} WHERE ticket_id = :tid"),
+                    params,
+                )
+
+    def _row_to_ticket(self, row) -> dict:
+        """将 SQL 行转为 ticket dict"""
+        return {
+            "id": row["id"],
+            "ticket_id": row["ticket_id"],
+            "user_id": row["user_id"],
+            "order_id": row["order_id"],
+            "type": row["type"],
+            "priority": row["priority"],
+            "status": row["status"],
+            "description": row["description"],
+            "resolution": row["resolution"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else "",
+            "resolved_at": row["resolved_at"].isoformat() if row["resolved_at"] else None,
+        }
 
     def _row_to_profile(self, row) -> dict:
         """将 SQL 查询行转为 profile dict"""

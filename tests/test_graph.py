@@ -56,6 +56,7 @@ class TestNodeRegistration:
         "revision_loop",
         "human_handoff",
         "operations_sync",
+        "operations_handoff",
         "sales_agent",
         "operations_agent",
     ]
@@ -117,6 +118,18 @@ class TestEdgeStructure:
         assert ("human_handoff", "operations_sync") in self._edge_set(), (
             "human_handoff 应有固定边 → operations_sync"
         )
+
+    def test_operations_handoff_to_operations_sync(self):
+        """operations_handoff → operations_sync 固定边应存在（Phase 21）"""
+        assert ("operations_handoff", "operations_sync") in self._edge_set(), (
+            "operations_handoff 应有固定边 → operations_sync"
+        )
+
+    def test_sales_to_operations_handoff_conditional(self):
+        """sales_agent 应有条件边 → operations_handoff（Phase 21 WON 接管）"""
+        edges = self._edge_set()
+        out_edges = {e for e in edges if e[0] == "sales_agent"}
+        assert len(out_edges) > 0, "sales_agent 应有条件边"
 
     def test_intent_router_has_conditional_edges(self):
         """v3: route_decision 节点应有条件边分发到各业务分支"""

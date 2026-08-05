@@ -221,3 +221,52 @@ CREATE TABLE IF NOT EXISTS sales_pipeline (
     INDEX idx_updated (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   COMMENT='销售 Pipeline——跟踪每个用户的购买漏斗阶段';
+
+-- =============================================================================
+-- Phase 21: 订单 + 工单（运营 Agent——用户与产品的桥梁）
+-- =============================================================================
+
+-- 订单主表
+CREATE TABLE IF NOT EXISTS orders (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    order_id        VARCHAR(32) NOT NULL UNIQUE COMMENT 'ORD-{timestamp}{random}',
+    user_id         VARCHAR(64) NOT NULL COMMENT '用户 ID',
+    draft_id        VARCHAR(255) COMMENT '关联的行程方案 session_id',
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending_confirmation'
+                    COMMENT 'pending_confirmation/confirmed/active/completed/cancelled/disputed',
+    destination     VARCHAR(100) COMMENT '目的地',
+    days            INT COMMENT '行程天数',
+    pax             INT COMMENT '人数',
+    trip_start      DATE COMMENT '行程开始日期',
+    trip_end        DATE COMMENT '行程结束日期',
+    total_amount    VARCHAR(50) COMMENT '订单总金额',
+    currency        VARCHAR(10) DEFAULT '¥' COMMENT '币种',
+    items           JSON COMMENT '[{type, supplier, product_name, price, quantity, confirm_status, confirm_ref, contact_info}]',
+    paid_at         TIMESTAMP NULL COMMENT '支付完成时间',
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_user (user_id),
+    INDEX idx_status (status),
+    INDEX idx_order_id (order_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='订单——从成交到行程结束';
+
+-- 工单表
+CREATE TABLE IF NOT EXISTS tickets (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    ticket_id       VARCHAR(32) NOT NULL UNIQUE COMMENT 'TK-{timestamp}{random}',
+    user_id         VARCHAR(64) NOT NULL COMMENT '用户 ID',
+    order_id        VARCHAR(32) COMMENT '关联订单（可为空）',
+    type            VARCHAR(20) NOT NULL COMMENT 'complaint/refund/modification/inquiry/emergency',
+    priority        VARCHAR(10) NOT NULL DEFAULT 'normal' COMMENT 'normal/urgent/critical',
+    status          VARCHAR(20) NOT NULL DEFAULT 'open' COMMENT 'open/processing/resolved/closed',
+    description     TEXT COMMENT '工单描述',
+    resolution      TEXT COMMENT '处理结果',
+    created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    resolved_at     TIMESTAMP NULL COMMENT '解决时间',
+    INDEX idx_user (user_id),
+    INDEX idx_order (order_id),
+    INDEX idx_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='工单——投诉/退款/改期/咨询';

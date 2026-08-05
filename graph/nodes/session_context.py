@@ -39,6 +39,10 @@ async def session_context(state: AgentState) -> dict:
         "has_unconverted_trip": state.get("has_unconverted_trip", False),
         "previous_draft_id": state.get("previous_draft_id", ""),
         "goto_planner": state.get("goto_planner", False),
+        # Phase 21: 运营订单检测
+        "has_active_order": state.get("has_active_order", False),
+        "active_order_id": state.get("active_order_id", ""),
+        "order_context": state.get("order_context", {}),
         # 🆕 共享黑板 v2 新字段
         "handoff": state.get("handoff", {}),
         "agent_traces": state.get("agent_traces", []),
@@ -86,6 +90,18 @@ async def session_context(state: AgentState) -> dict:
                         if gap_hours >= 7 * 24:
                             await mm.mark_pipeline_lost(user_id)
                             result["has_unconverted_trip"] = False
+        except Exception:
+            pass  # 检测失败不阻塞对话
+
+    # Phase 21: 检测用户是否有进行中的订单（运营路由加权用）
+    if user_id and not result.get("has_active_order"):
+        try:
+            from services.memory import MemoryManager
+            mm = MemoryManager()
+            active_order = await mm.get_active_order(user_id)
+            if active_order:
+                result["has_active_order"] = True
+                result["active_order_id"] = active_order["order_id"]
         except Exception:
             pass  # 检测失败不阻塞对话
 
