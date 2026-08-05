@@ -9,7 +9,7 @@
     response = router_llm.invoke([{"role": "user", "content": "你好"}])
 
 模型分层策略（成本控制）：
-    get_light_llm()  → qwen-turbo   — 客服、运营（检索+工具调用，轻量足矣）
+    get_light_llm()  → qwen-plus    — 客服、运营（需多工具 function calling 支持）
     get_router_llm() → qwen-plus    — 销售、路由、意图识别（中等推理）
     get_agent_llm()  → qwen3-max    — 行程定制（复杂长文本生成，需要最强模型）
 """
@@ -531,10 +531,10 @@ def get_agent_llm() -> BailianLLM:
 
 
 def get_light_llm() -> BailianLLM:
-    """轻量任务用快速模型（qwen-turbo：极低延迟、最低成本）
+    """轻量任务用快速模型（qwen-plus：平衡速度与工具调用能力）
 
-    适用于 FAQ 检索回答、CRM/CAPI 工具调用、查询改写等简单任务。
-    同样支持 function calling，无需担心工具调用兼容性。
+    适用于 FAQ 检索回答、CRM/CAPI 工具调用、查询改写等任务。
+    支持多工具 function calling（qwen-turbo 仅支持单工具，多工具场景需 qwen-plus）。
 
     环境变量：
         LIGHT_MODEL, LLM_API_KEY, LLM_BASE_URL

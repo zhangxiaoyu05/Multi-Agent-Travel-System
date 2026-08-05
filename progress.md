@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-04（Phase 20 销售 Agent 重设计——Pipeline 状态机 + 分阶段销售 + 跟进策略）
+> 最后更新：2026-08-05（Phase 21-续-2 LIGHT_MODEL 升级——qwen-plus 修复多工具调用 400 错误）
 
 ---
 
@@ -1116,17 +1116,19 @@ SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，�
 
 | 层级 | 工厂函数 | 模型 | 适用场景 | 百炼定价 |
 |---|---|---|---|---|
-| Light | `get_light_llm()` | qwen-turbo | 客服、运营、查询改写 | ¥0.3 入 / ¥0.6 出 |
+| Light | `get_light_llm()` | qwen-plus | 客服、运营、查询改写（需多工具 function calling） | ¥0.8 入 / ¥2 出 |
 | Mid | `get_router_llm()` | qwen-plus | 销售、路由、意图打分 | ¥0.8 入 / ¥2 出 |
 | Heavy | `get_agent_llm()` | qwen3-max | 行程定制 | 贵 3-5× |
 
 所有模型均支持 function calling，`_run_tool_calling_loop` 零改动。
 
+> **⚠️ 2026-08-05 更新**：Light 层默认模型从 `qwen-turbo` 升级为 `qwen-plus`——因 qwen-turbo 仅支持单工具 function calling，销售 Agent（6 tools）和运营 Agent（12 tools）会触发 API 400 错误。详见操作记录 Phase 21-续-2。
+
 #### 修改文件
 
 | 文件 | 变更 |
 |---|---|
-| `services/llm.py` | 新增 `get_light_llm()` 工厂函数（默认 qwen-turbo）+ 模型分层文档 + 环境变量 `LIGHT_MODEL`/`LIGHT_TEMPERATURE`/`LIGHT_MAX_TOKENS` |
+| `services/llm.py` | 新增 `get_light_llm()` 工厂函数（默认 qwen-plus，后从 qwen-turbo 升级——因 qwen-turbo 不支持多工具 function calling）+ 模型分层文档 + 环境变量 `LIGHT_MODEL`/`LIGHT_TEMPERATURE`/`LIGHT_MAX_TOKENS` |
 | `agents/customer_service.py` | `get_agent_llm` → `get_light_llm` |
 | `agents/operations_agent.py` | `get_agent_llm` → `get_light_llm` |
 | `agents/sales_agent.py` | `get_agent_llm` → `get_router_llm` |
@@ -1135,7 +1137,7 @@ SSE 进度推送中，`route_decision` 节点不在 `NODE_LABELS` 字典里，�
 
 #### 成本节约
 
-客服、运营、销售三个 Agent 从 qwen3-max → qwen-turbo/qwen-plus，**每次对话成本降低约 85-90%**。
+客服、运营、销售三个 Agent 从 qwen3-max → qwen-plus，**每次对话成本降低约 85-90%**。
 
 环境变量覆盖：
 ```bash
@@ -1279,5 +1281,6 @@ after_sales 路由（新）: human_handoff / trip_planner / operations_sync / en
 | 2026-08-04 | Phase 19-续：模型分层成本优化——① 新增 `get_light_llm()` 工厂（qwen-turbo）；② 客服/运营 → qwen-turbo（↓~90%费用）；③ 销售 → qwen-plus；④ 查询改写 → qwen-turbo；⑤ 行程定制保持 qwen3-max；⑥ 所有模型均支持 function calling，Agent 代码零改动；⑦ 193 测试全部通过 | ✅ |
 | 2026-08-04 | Phase 20：销售 Agent 重设计——① Pipeline 五阶段模型（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST）；② 4 个分阶段 Prompt 动态加载；③ 5 个新 Mock 销售工具（load_trip_draft/create_order/get_payment_url/apply_coupon/check_order_status）；④ 跟进策略（24h 温和→3d 优惠→7d 放弃）；⑤ 行程修改检测（goto_planner→trip_planner→回销售）；⑥ 新建 5 文件/重写 2 文件/修改 10 文件/删除 1 文件；⑦ 215 测试全部通过 | ✅ |
 | 2026-08-05 | Phase 21-续：E2E 测试 Bug 修复——① P0 天数误提取：`_extract_fields_regex` 正则把"9月20日"的"20"误判为天数→清洗日期模式后再提取+合理性检查(>30拒绝)；② P1 模板变量：3个销售Prompt中`{目的地}`/`{某项目}`被LLM原样输出→改为具体示例(如"北京")；③ P1 上下文丢失：`_run_tool_calling_loop`只传当前消息→新增`history`参数传入最近5轮对话；④ P2 Pipeline卡LEAD：`_build_draft_context`仅从state提取→新增对话历史正则fallback；⑤ 8文件修改+5个回归测试，243测试通过 | ✅ |
-| 2026-08-05 | Phase 21：运营 Agent 重设计——用户与产品的桥梁：① 数据库新建 orders + tickets 表；② 10 个运营工具（产品查询×4 search_hotels/flights/tickets/guides + 订单管理×4 get_order/list_orders/cancel_order/modify_order + 工单×2 create_ticket/check_ticket）；③ 运营工具作为平台共享能力层（MCP→Mock 降级）；④ Agent 重写：12 工具 + WON 接管 + 紧急升级 + CRM 强制写入；⑤ 新建 operations_handoff 节点（销售成交后运营自动接管）；⑥ after_sales 路由新增 won→operations_handoff→operations_sync；⑦ session_context 检测 has_active_order → intent_router 加权 operations ×1.5；⑧ State 新增 has_active_order/active_order_id/order_context 字段；⑨ MemoryManager 新增 7 个 order/ticket CRUD 方法；⑩ 新建 2 文件/重写 3 文件/修改 10 文件；⑪ 238 测试全部通过（+23 运营专项测试） | ✅ |
+| 2026-08-05 | Phase 21：运营 Agent 重设计——用户与产品的桥梁：① 数据库新建 orders + tickets 表；② 10 个运营工具（产品查询×4 search_hotels/flights/tickets/guides + 订单管理×4 get_order/list_orders/cancel_order/modify_order + 工单×2 create_ticket/check_ticket）；③ 运营工具作为平台共享能力层（MCP→Mock 降级）；④ Agent 重写：12 工具 + WON 接管 + 紧急升级 + CRM 强制写入；⑤ 新建 operations_handoff 节点（销售成交后运营自动接管）；⑥ after_sales 路由新增 won→operations_handoff→operations_sync；⑦ session_context 检测 has_active_order → intent_router 加权 operations ×1.5；⑧ State 新增 has_active_order/active_order_id/order_context 字段；⑨ MemoryManager 新增 7 个 order/ticket CRUD 方法；⑩ 新建 2 文件/重写 3 文件/修改 10 文件；⑪ 243 测试全部通过（+28 运营专项测试） | ✅ |
+| 2026-08-05 | Phase 21-续-2：LIGHT_MODEL 修复——① 销售 Agent（6 tools）和运营 Agent（12 tools）调用 qwen-turbo 时 API 返回 400 → 根因是 qwen-turbo 不支持多工具 function calling；② `get_light_llm()` 默认模型从 `qwen-turbo` 改为 `qwen-plus`（代码默认 + `.env` 显式配置）；③ `.env.example` 补全 LIGHT_MODEL/LIGHT_TEMPERATURE/LIGHT_MAX_TOKENS 文档；④ `ainvoke()` 新增详细错误日志（记录 API 响应体便于排查）；⑤ ⚠️ 需重启后端使配置生效 | ✅ |
 
