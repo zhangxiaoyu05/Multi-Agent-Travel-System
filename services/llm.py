@@ -132,7 +132,17 @@ class BailianLLM:
         headers = self._headers()
         client = self._get_async_client()
         resp = await client.post(self._url, json=body, headers=headers)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            # 记录详细的错误响应体，方便排查
+            import logging
+            _log = logging.getLogger(__name__)
+            try:
+                _log.error(f"LLM API error body: {resp.text[:2000]}")
+            except Exception:
+                pass
+            raise
         return self._parse_response(resp.json())
 
     async def astream(self, messages: list, tools: list | None = None,
@@ -533,7 +543,7 @@ def get_light_llm() -> BailianLLM:
     global _light_llm
     if _light_llm is None:
         _light_llm = BailianLLM(
-            model=os.getenv("LIGHT_MODEL", "qwen-turbo"),
+            model=os.getenv("LIGHT_MODEL", "qwen-plus"),
             api_key=_get_api_key(),
             base_url=os.getenv("LLM_BASE_URL", BAILIAN_BASE_URL),
             temperature=float(os.getenv("LIGHT_TEMPERATURE", "0.7")),
