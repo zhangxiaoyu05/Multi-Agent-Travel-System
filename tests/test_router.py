@@ -67,8 +67,8 @@ class TestIntentRouterNode:
         from langchain_core.messages import HumanMessage
         state = {"messages": [HumanMessage(content="")]}
         result = intent_router(state)
-        assert result["intent_scores"]["service"] == 1.0
-        assert result["intent_scores"]["planner"] == 0.0
+        assert result["intent_scores"]["service"] == 0.85
+        assert result["intent_scores"]["planner"] == 0.05
         assert result["need_human"] is False
 
     def test_whitespace_only(self):
@@ -76,7 +76,7 @@ class TestIntentRouterNode:
         from langchain_core.messages import HumanMessage
         state = {"messages": [HumanMessage(content="   ")]}
         result = intent_router(state)
-        assert result["intent_scores"]["service"] == 1.0
+        assert result["intent_scores"]["service"] == 0.85
 
     @patch("graph.nodes.intent_router.get_router_llm")
     def test_router_return_keys(self, mock_llm):
@@ -242,3 +242,84 @@ class TestRouteDecision:
         }
         result = route_decision(state)
         assert result in ("customer_service", "trip_planner")
+
+
+# =============================================================================
+# 行程定制预检（Phase 22 修复：绕过 LLM 惯性误判）
+# =============================================================================
+
+
+class TestTripPlanningPrefilter:
+    """验证 _has_trip_planning_intent 正确识别行程定制信号"""
+
+    def test_standalone_destination(self):
+        """「我想去拉萨」独立成句应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("我想去拉萨") is True
+        assert _has_trip_planning_intent("我要去成都") is True
+        assert _has_trip_planning_intent("准备去杭州") is True
+
+    def test_destination_with_budget_and_date(self):
+        """「我想去拉萨，一个人，预算5000元，8-15到」——多要素强信号应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("我想去拉萨，一个人，预算5000元，8-15到") is True
+
+    def test_change_destination(self):
+        """「帮我把目的地改为拉萨」应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("那帮我把目的地改为拉萨") is True
+        assert _has_trip_planning_intent("帮我把目的地换到成都") is True
+
+    def test_explicit_customize(self):
+        """「定制」「帮我设计行程」应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("定制") is True
+        assert _has_trip_planning_intent("帮我设计一个行程") is True
+        assert _has_trip_planning_intent("帮我安排一个3天的行程") is True
+
+    def test_destination_with_days(self):
+        """「去成都5天」「去拉萨待几天」应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("去成都5天") is True
+        assert _has_trip_planning_intent("去拉萨待几天") is True
+
+    def test_faq_about_visa_not_planner(self):
+        """「我想去拉萨需要什么签证」是 FAQ，不应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("我想去拉萨需要什么签证") is False
+        assert _has_trip_planning_intent("去拉萨要办边防证吗") is False
+
+    def test_faq_about_process_not_planner(self):
+        """「定制流程是什么」「怎样定制行程」是 FAQ，不应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("定制流程是什么") is False
+        assert _has_trip_planning_intent("怎样定制行程") is False
+
+    def test_greeting_not_planner(self):
+        """寒暄不应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("你好") is False
+        assert _has_trip_planning_intent("你能干什么") is False
+
+    def test_destination_with_how_not_planner(self):
+        """「我想去成都怎么走」是 FAQ 问交通，不应命中"""
+        from graph.nodes.intent_router import _has_trip_planning_intent
+        assert _has_trip_planning_intent("我想去成都怎么走") is False
+
+    def test_prefilter_returns_high_planner_scores(self):
+        """预检命中应返回高 planner 分数 + journey_stage=planning"""
+        from graph.nodes.intent_router import _prefilter_user_message
+        result = _prefilter_user_message("我想去拉萨，一个人，预算5000")
+        assert result is not None
+        assert result["intent_scores"]["planner"] == 0.85
+        assert result["journey_stage"] == "planning"
+        assert result["need_human"] is False
+
+    def test_prefilter_non_trip_returns_none(self):
+        """非行程消息预检应返回 None（让 LLM 处理）"""
+        from graph.nodes.intent_router import _prefilter_user_message
+        assert _prefilter_user_message("你好") is not None  # 寒暄拦截
+        assert _prefilter_user_message("你能干什么") is not None  # 能力询问拦截
+        # 普通消息应返回 None
+        result = _prefilter_user_message("今天天气怎么样")
+        assert result is None, f"Expected None, got {result}"

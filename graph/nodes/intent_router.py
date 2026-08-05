@@ -47,6 +47,37 @@ _GREETING_PATTERNS = [
     r"^(感谢|谢谢|多谢|thanks?)[!！。.]*$",
 ]
 
+# 行程定制意图预检——明确的行程规划信号，跳过 LLM 直接路由到 planner
+# 避免 LLM 在对话历史惯性下将"我想去拉萨"等误判为 service
+_TRIP_PLANNING_PATTERNS = [
+    # ① 独立「定制」请求（不含 FAQ 疑问词）
+    r"^(定制|我要定制|帮我定制|给我定制|想定制|求定制|我要订制|帮我订制|我要订制行程)[!！。.,，、\s]*$",
+    # ② 明确请求设计/规划/安排行程（允许量词和关键词之间有修饰内容如"3天的"）
+    r"(?:帮我|给我|我想|我要|请|麻烦)(?:安排|设计|规划|定制|做|弄)(?:一个|一下|个|份)?[^。!！?？\n]{0,10}(?:行程|路线|方案|旅行计划|旅游计划|出游计划)",
+    r"(?:设计|规划|定制|安排)(?:一个|一下|个|份)?(?:行程|路线|旅行|旅游)(?:吧|吗|呗|啊|呀|哦|呢)?[!！。.,，\s]*$",
+    # ③ 把目的地改为/换成 X
+    r"(?:把|将)目的地(?:改|换|更改|修改|换成)(?:为|成|到|的)",
+    r"^(?:改|换|换成|改为)(?:为|成|到|的)?(?:目的地|地方|城市|行程)[!！。.,，\s]*$",
+    # ④ "我想去 X" + 预算/天数/日期/人数（多要素组合，强信号）
+    r"我想去.{2,20}(?:预算|元|块钱|天|日|号|月|人|个人|单独|自己)",
+    # ⑤ "我想去 X 玩/旅游/旅行" 结尾（不含签证/证件等 FAQ 词）
+    r"我想去.{2,10}(?:玩|旅游|旅行|转转|看看|转山|徒步|度假|自由行)[!！。.,，、\s]*$",
+    # ⑤-b "我想去/我要去 X" 独立成句（仅跟城市名 2-4 字，后面不能紧跟汉字）
+    r"^(?:我想|我要|我打算|我计划|准备)去[一-鿿]{2,4}(?![一-鿿])[!！。.,，、\s]*$",
+    # ⑥ "去 X 玩几天" / "去 X 几天" / "去 X 5天"
+    r"(?:去|到|想去).{2,10}(?:玩|旅游|旅行|待|呆|住)?(?:\d+\s*(?:天|日|晚)|几天|多少天|几日|多长时间)",
+    # ⑦ 具体目的地+日期+预算三者组合
+    r"(?:去|到)(?:[一-鿿]{2,6})[^。!！?？\n]{0,30}(?:预算|元|块钱)[^。!！?？\n]{0,20}(?:到|出发|走|号|日|月)",
+]
+
+# 行程定制排除模式——虽然匹配行程词但实际是 FAQ（优先级高于 _TRIP_PLANNING_PATTERNS）
+_TRIP_PLANNING_EXCLUDE_PATTERNS = [
+    r"签证|证件|护照|通行证|边防证|入藏函",
+    r"(?:行程|定制|旅游|旅行).*(?:流程|步骤|怎么|如何|怎样|什么|多少钱|价格|费用)",
+    r"(?:怎么|如何|怎样|什么).*(?:定制|设计|规划|安排)",
+    r"(?:需要|要).*(?:签证|证件|材料|手续)",
+]
+
 # 投诉/退款触发词（用于预检——但能力询问不走此逻辑）
 _OBVIOUS_COMPLAINT_WORDS = ["投诉", "退款", "差评", "我要投诉", "找你们领导", "骗子", "坑人"]
 
@@ -69,6 +100,26 @@ def _has_complaint_intent(user_text: str) -> bool:
     """检查用户消息是否表达明确的投诉/退款意图（非 FAQ 查询）。"""
     text = user_text.strip()
     for pattern in _OBVIOUS_COMPLAINT_PATTERNS:
+        if re.search(pattern, text):
+            return True
+    return False
+
+
+def _has_trip_planning_intent(user_text: str) -> bool:
+    """检查用户消息是否表达明确的行程定制意图（非 FAQ 咨询）。
+
+    先检查排除模式（FAQ 类行程问题），再检查正向模式。
+    这样「我想去拉萨需要什么签证」不会误触 planner 路由。
+    """
+    text = user_text.strip()
+
+    # 先排除 FAQ 类问题
+    for pattern in _TRIP_PLANNING_EXCLUDE_PATTERNS:
+        if re.search(pattern, text):
+            return False
+
+    # 检查正向行程定制信号
+    for pattern in _TRIP_PLANNING_PATTERNS:
         if re.search(pattern, text):
             return True
     return False
@@ -115,7 +166,23 @@ def _prefilter_user_message(user_text: str) -> dict | None:
                 }],
             }
 
-    # 3. 明确的投诉/退款关键词预检（仅用于优先标记，仍然走 LLM 精确判断）
+    # 3. 行程定制预检——明确的行程规划信号，跳过 LLM 直接路由到 planner
+    #    解决 LLM（qwen-plus）在对话历史惯性下将「我想去拉萨」误判为 service 的问题
+    if _has_trip_planning_intent(text):
+        return {
+            "intent_scores": {"service": 0.05, "sales": 0.05, "operations": 0.05, "planner": 0.85},
+            "need_human": False,
+            "handoff": {},
+            "journey_stage": "planning",
+            "agent_traces": [{
+                "agent": "intent_router",
+                "action": "prefilter_trip_planning",
+                "outcome": "planner=0.85, stage=planning (预检命中)",
+                "confidence": "high",
+            }],
+        }
+
+    # 4. 明确的投诉/退款关键词预检（仅用于优先标记，仍然走 LLM 精确判断）
     #    注意：不在此处返回，仅记录。LLM 做最终判断。
     #    （这里只是预防性注释，实际上预检不拦截投诉，让 LLM 正常判断）
 
