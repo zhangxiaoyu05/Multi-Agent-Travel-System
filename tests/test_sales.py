@@ -460,3 +460,43 @@ class TestSalesNode:
 
         assert result["sales_pipeline_stage"] == "won"
         assert result["agent_traces"][0]["action"] == "closed_deal"
+
+
+# =============================================================================
+# 回归测试：_build_draft_context 从对话历史提取（Phase 21 E2E 发现）
+# =============================================================================
+
+
+class TestDraftContextFromHistory:
+    """验证 _build_draft_context 在没有正式 need/draft 时也能从对话中提取"""
+
+    def test_extract_destination_from_messages(self):
+        """对话中提到北京，应自动提取 destination=北京"""
+        from langchain_core.messages import HumanMessage, AIMessage
+        from agents.sales_agent import _build_draft_context
+
+        state = {
+            "messages": [
+                HumanMessage(content="我想去北京玩3天"),
+                AIMessage(content="好的，北京3日游，请问预算多少？"),
+                HumanMessage(content="2500以内"),
+            ],
+        }
+        result = _build_draft_context(state)
+        assert result is not None, "应从对话历史中提取到 destination"
+        assert result.get("destination") == "北京"
+        assert result.get("days") == 3
+
+    def test_no_context_returns_none(self):
+        """对话中没有目的地信息时返回 None"""
+        from langchain_core.messages import HumanMessage, AIMessage
+        from agents.sales_agent import _build_draft_context
+
+        state = {
+            "messages": [
+                HumanMessage(content="你好"),
+                AIMessage(content="你好！有什么可以帮您的？"),
+            ],
+        }
+        result = _build_draft_context(state)
+        assert result is None, "没有目的地信息时应该返回 None"

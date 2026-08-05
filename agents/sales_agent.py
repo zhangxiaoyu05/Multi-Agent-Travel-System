@@ -140,7 +140,10 @@ def _determine_next_stage(
 
 
 def _build_draft_context(state: AgentState) -> dict | None:
-    """从 State 中提取行程方案上下文（用于注入 Prompt）"""
+    """从 State 中提取行程方案上下文（用于注入 Prompt）
+
+    优先使用 state.draft/need，其次从对话历史中正则提取。
+    """
     need = state.get("need", {}) or {}
     draft = state.get("draft", {}) or {}
 
@@ -167,6 +170,39 @@ def _build_draft_context(state: AgentState) -> dict | None:
             "theme": need.get("theme", ""),
             "pace": need.get("pace", ""),
         }
+
+    # 无正式 need/draft → 从最近对话中正则提取（避免 LEAD 阶段反复询问已提供的城市）
+    from langchain_core.messages import HumanMessage
+    messages = state.get("messages", []) or []
+    user_msgs = [m for m in messages if isinstance(m, HumanMessage)]
+    # 合并最近 5 条用户消息的内容
+    combined = " ".join(
+        m.content for m in reversed(user_msgs[-5:])
+        if hasattr(m, "content") and m.content
+    )
+    if combined:
+        extracted: dict = {}
+        cities = ["北京", "西安", "上海", "成都", "广州", "桂林", "杭州", "重庆",
+                   "昆明", "拉萨", "哈尔滨", "三亚", "深圳", "南京", "武汉", "苏州",
+                   "厦门", "大理", "丽江", "张家界"]
+        for city in cities:
+            if city in combined:
+                extracted["destination"] = city
+                break
+        # 清洗日期模式后提取天数（避免 "9月20日" 被误提取为 20 天）
+        cleaned = re.sub(r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日号]?', '', combined)
+        cleaned = re.sub(r'\d{1,2}\s*月\s*\d{1,2}\s*[日号]', '', cleaned)
+        m = re.search(r'(\d+)\s*[天日]', cleaned)
+        if m and int(m.group(1)) <= 30:
+            extracted["days"] = int(m.group(1))
+        m = re.search(r'(\d+)\s*[人个位]', combined)
+        if m:
+            extracted["pax"] = int(m.group(1))
+        m = re.search(r'[¥\$]\s*(\d[\d,]*)', combined)
+        if m:
+            extracted["budget"] = f"¥{m.group(1)}"
+        if extracted.get("destination"):
+            return extracted
 
     return None
 
@@ -225,9 +261,11 @@ class SalesAgent(BaseAgent):
             return self._empty_reply(current_stage, has_draft, followup_msg)
 
         # ── 第 6 步：LLM + Tool Calling ──
+        # 提取对话历史（最近 5 轮，不含当前消息），让 LLM 记住上下文
+        history = self._get_message_history(state, max_turns=5)
         loop_result = await self._run_tool_calling_loop(
             user_msg, language=language, extra_context=extra_context,
-            session_id=session_id,
+            session_id=session_id, history=history,
         )
         final_text = loop_result["final_text"]
         need_human = loop_result["need_human"]

@@ -560,3 +560,36 @@ class TestCRMEnforcement:
 
         assert "final_reply" in result
         assert result["need_human"] is False
+
+
+# =============================================================================
+# 回归测试：天数提取 Bug 修复（Phase 21 E2E 发现）
+# =============================================================================
+
+
+class TestDaysExtractionFix:
+    """验证 _extract_fields_regex 不会把日期中的"日"误提取为天数"""
+
+    def test_date_not_mistaken_for_days(self):
+        """9月20日 + 2个人 → days 应该是 None，不是 20"""
+        from agents.trip_planner import _extract_fields_regex
+        result = _extract_fields_regex("9月20日，2个人")
+        assert result.get("days") != 20, (
+            f"BUG 回归：'9月20日' 中的 '20日' 被误提取为 days={result.get('days')}，应为 None（无天数）"
+        )
+
+    def test_days_extracted_from_tian_only(self):
+        """成都玩3天 + 9月20日 → days=3，不受日期数字干扰"""
+        from agents.trip_planner import _extract_fields_regex
+        result = _extract_fields_regex("成都玩3天，9月20日，2个人")
+        assert result.get("days") == 3, (
+            f"'成都玩3天' 应提取 days=3，实际: {result.get('days')}"
+        )
+
+    def test_large_day_filtered(self):
+        """大于 30 的天数被合理性检查拒绝"""
+        from agents.trip_planner import _extract_fields_regex
+        result = _extract_fields_regex("我要玩45天")
+        assert result.get("days") is None, (
+            f"45 天 > 30 应被合理性检查拒绝，实际: {result.get('days')}"
+        )

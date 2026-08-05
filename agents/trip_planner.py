@@ -67,10 +67,15 @@ def _extract_fields_regex(user_msg: str) -> dict:
             extracted["destination"] = city
             break
 
-    # 天数
-    m = re.search(r'(\d+)\s*[天日]', user_msg)
+    # 天数（先清洗日期中的"日/号"，避免 "9月20日" 被误提取为 20 天）
+    cleaned_msg = re.sub(r'\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日号]?', '', user_msg)
+    cleaned_msg = re.sub(r'\d{1,2}\s*月\s*\d{1,2}\s*[日号]', '', cleaned_msg)
+    m = re.search(r'(\d+)\s*[天日]', cleaned_msg)
     if m:
-        extracted["days"] = int(m.group(1))
+        days_val = int(m.group(1))
+        # 合理性检查：天数 > 30 大概率是日期误提取，回退
+        if days_val <= 30:
+            extracted["days"] = days_val
 
     # 人数
     m = re.search(r'(\d+)\s*[人个位]', user_msg)

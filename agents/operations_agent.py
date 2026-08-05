@@ -79,9 +79,10 @@ class OperationsAgent(BaseAgent):
             return self._empty_reply(active_order, is_handoff, handoff_msg)
 
         # ── 第 5 步：LLM + Tool Calling ──
+        history = self._get_message_history(state, max_turns=5)
         loop_result = await self._run_tool_calling_loop(
             user_msg, language=language, extra_context=extra_context,
-            session_id=session_id,
+            session_id=session_id, history=history,
         )
         final_text = loop_result["final_text"]
         need_human = loop_result["need_human"]

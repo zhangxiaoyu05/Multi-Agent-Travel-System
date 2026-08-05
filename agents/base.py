@@ -61,7 +61,7 @@ class BaseAgent(ABC):
 
     async def _run_tool_calling_loop(
         self, user_msg: str, language: str = "zh", extra_context: dict | None = None,
-        session_id: str = "",
+        session_id: str = "", history: list | None = None,
     ) -> dict:
         """标准 LLM + Tool 调用循环（支持流式输出到前端）。
 
@@ -76,6 +76,7 @@ class BaseAgent(ABC):
             language: 语言代码（zh/en/ja/ko），用于注入语言指令
             extra_context: 额外上下文，注入到 system prompt 后
             session_id: 会话 ID。若提供，最终回复将流式推送到前端
+            history: 对话历史消息列表（不含当前 user_msg）
 
         Returns:
             {
@@ -94,10 +95,12 @@ class BaseAgent(ABC):
             system_content = f"{system_content}\n\n[附加上下文]\n{ctx_str}"
 
         llm_with_tools = self.llm.bind_tools(self.tools)
-        response = await llm_with_tools.ainvoke([
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": user_msg},
-        ])
+        # 构建消息列表：system + history + current user
+        msg_list = [{"role": "system", "content": system_content}]
+        if history:
+            msg_list.extend(history)
+        msg_list.append({"role": "user", "content": user_msg})
+        response = await llm_with_tools.ainvoke(msg_list)
 
         # Step 2: 执行 tool calls
         need_human = False
@@ -127,11 +130,12 @@ class BaseAgent(ABC):
                     })
 
             if tool_messages:
-                conversation = [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_msg},
-                    response.to_message_dict(),
-                ] + tool_messages
+                conversation = [{"role": "system", "content": system_content}]
+                if history:
+                    conversation.extend(history)
+                conversation.append({"role": "user", "content": user_msg})
+                conversation.append(response.to_message_dict())
+                conversation.extend(tool_messages)
 
                 final_text = await self._stream_final(conversation, session_id)
                 return {
