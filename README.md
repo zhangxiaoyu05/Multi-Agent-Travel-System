@@ -343,11 +343,11 @@ event: done            → {完整 ChatResponse}
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/profile` | 获取当前用户画像（基础信息 + 旅行偏好 + LLM 建议） |
-| `PUT` | `/profile` | 更新画像（可同时 `accept_suggestions: true` 采纳 AI 建议） |
-| `GET` | `/profile/suggestions` | 获取 LLM 待确认的画像更新建议 |
-| `POST` | `/profile/suggestions/accept` | 采纳所有 LLM 建议 → 合并到画像主字段 |
-| `POST` | `/profile/suggestions/reject` | 忽略所有 LLM 建议 |
+| `GET` | `/api/profile` | 获取当前用户画像（基础信息 + 旅行偏好 + LLM 建议） |
+| `PUT` | `/api/profile` | 更新画像（可同时 `accept_suggestions: true` 采纳 AI 建议） |
+| `GET` | `/api/profile/suggestions` | 获取 LLM 待确认的画像更新建议 |
+| `POST` | `/api/profile/suggestions/accept` | 采纳所有 LLM 建议 → 合并到画像主字段 |
+| `POST` | `/api/profile/suggestions/reject` | 忽略所有 LLM 建议 |
 | `GET` | `/preferences` | 获取 LLM 自动提取的中期偏好快照 |
 
 ### 页面路由
@@ -355,7 +355,7 @@ event: done            → {完整 ChatResponse}
 | 路径 | 说明 |
 |------|------|
 | `/` | 聊天主界面 |
-| `/profile` | 用户画像编辑页 |
+| `/profile` | 用户画像编辑页（浏览器直接访问） |
 
 ### 🧠 AI 记忆注入
 
@@ -458,6 +458,7 @@ python -m api.main test --quick  # 快速模式 8 组
 | Phase 19-续 | 模型分层成本优化——三层架构（Light=qwen-turbo/Mid=qwen-plus/Heavy=qwen3-max），客服+运营 → qwen-turbo（↓~90% 费用），销售 → qwen-plus，行程保持 qwen3-max，新增 get_light_llm() 工厂，Agent 代码零改动 | ✅ |
 | Phase 20 | 销售 Agent 重设计——Pipeline 五阶段状态机（LEAD→QUALIFIED→NEGOTIATION→CLOSING→WON/LOST）+ 4 个分阶段 Prompt 动态加载 + 5 个新 Mock 销售工具 + 跟进策略（24h 温和→3d 优惠→7d 放弃）+ 行程修改检测（goto_planner→trip_planner→回销售）+ 新建 5 文件/重写 2 文件/修改 10 文件/删除 1 文件 | ✅ |
 | Phase 21 | 运营 Agent 重设计——用户与产品的桥梁：数据库 orders+tickets 表 + 10 个运营工具（产品查询×4 + 订单管理×4 + 工单×2）+ 工具即平台共享能力层（trip_planner/sales 也可调用）+ Agent 重写（12 工具 + WON 接管 + 紧急升级）+ operations_handoff 节点（销售成交运营自动接管）+ has_active_order 路由加权 + 新建 2 文件/重写 3 文件/修改 10 文件 + 243 测试全部通过 | ✅ |
+| Phase 21-续 | E2E 测试修复：LIGHT_MODEL qwen-turbo→qwen-plus（多工具调用 400）+ 西班牙语回复中文（7语言指令）+ Profile 页面路由冲突（API→/api/*）+ ROUTER_MODEL 对齐 .env.example + reset_all_singletons() 免重启切换 | ✅ |
 
 ## 许可证
 

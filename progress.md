@@ -2,7 +2,7 @@
 
 > 入境定制游多 Agent 系统——基于 LangGraph + FastAPI + 阿里百炼
 >
-> 最后更新：2026-08-05（Phase 21-续-2 LIGHT_MODEL 升级——qwen-plus 修复多工具调用 400 错误）
+> 最后更新：2026-08-05（Phase 21-续-3 E2E 测试修复——多语言指令 + Profile 路由 + 模型配置对齐）
 
 ---
 
@@ -1232,6 +1232,48 @@ after_sales 路由（新）: human_handoff / trip_planner / operations_sync / en
 - 43 个销售专项测试：工具（11）+ MCP 注册（5）+ Pipeline 阶段判定（7）+ 行程修改检测（2）+ 跟进策略（4）+ 条件边（8）+ 节点（6）
 
 
+### Phase 21-续-3 🌐 E2E 测试 3 项修复（2026-08-05）
+
+Chrome DevTools E2E 全功能测试发现 3 个问题，均已修复。
+
+#### 修复 1: P0 西班牙语回复中文——多语言指令增强
+
+**问题**：选择 Español 语言后，AI 收到西班牙语用户消息但用中文回复。
+
+**根因**：
+1. `customer_service.py` 最终回答指令（"请基于以上知识库检索结果和用户画像…"）始终为中文，会覆盖前面的语言指令
+2. 投诉关键词仅支持中文（"投诉/退款/骗人"），非中文用户投诉无法触发转人工
+
+**修复**（`agents/customer_service.py`）：
+- 最终回答指令改为 7 语言映射表（`_lang_instructions` dict），根据 `language` 参数注入对应语言
+- 投诉关键词扩展为 7 语言：中文/English/Español/日本語/한국어/हिन्दी/العربية
+
+#### 修复 2: P1 Profile 页面路由冲突
+
+**问题**：`GET /profile` 返回 JSON（API 端点），用户无法通过 `/profile` URL 访问画像页面。
+
+**根因**：API 端点 `/profile`（需认证返回 JSON）与前端页面 `/profile`（应返回 HTML）路由冲突。Phase 11 的修复删除了 HTML 路由（误以为 StaticFiles 会处理），但 StaticFiles 不自动追加 `.html` 后缀。
+
+**修复**（3 文件）：
+- `api/main.py`：API 端点路径 `GET/PUT /profile*` → `GET/PUT /api/profile*`；新增 `GET /profile` 返回 `profile.html` 页面（无需认证）
+- `frontend/profile.html`：所有 API 调用路径 `/profile*` → `/api/profile*`
+- `frontend/index.html`：侧边栏画像链接 `/static/profile.html` → `/profile`
+
+#### 修复 3: P1 ROUTER_MODEL 不一致
+
+**问题**：`.env.example` 文档建议 `ROUTER_MODEL=qwen-plus`，但 `.env` 实际值为 `qwen-turbo`，且销售 Agent 实际使用 `get_light_llm()`（受 LIGHT_MODEL 控制）。
+
+**修复**（2 文件）：
+- `.env`：`ROUTER_MODEL` 从 `qwen-turbo` 修正为 `qwen-plus`
+- `services/llm.py`：新增 `reset_all_singletons()` 函数（免重启切换模型单例）+ `_build_body()` 调试日志（记录 model + tool_count）
+- `api/main.py`：启动日志新增 LLM Light 行
+
+#### 验证
+
+- 243/243 测试全部通过，零回归
+- 5 文件修改：`agents/customer_service.py`、`api/main.py`、`frontend/profile.html`、`frontend/index.html`、`services/llm.py`
+
+
 ## 五、操作记录
 
 | 日期 | 操作 | 状态 |
@@ -1283,4 +1325,5 @@ after_sales 路由（新）: human_handoff / trip_planner / operations_sync / en
 | 2026-08-05 | Phase 21-续：E2E 测试 Bug 修复——① P0 天数误提取：`_extract_fields_regex` 正则把"9月20日"的"20"误判为天数→清洗日期模式后再提取+合理性检查(>30拒绝)；② P1 模板变量：3个销售Prompt中`{目的地}`/`{某项目}`被LLM原样输出→改为具体示例(如"北京")；③ P1 上下文丢失：`_run_tool_calling_loop`只传当前消息→新增`history`参数传入最近5轮对话；④ P2 Pipeline卡LEAD：`_build_draft_context`仅从state提取→新增对话历史正则fallback；⑤ 8文件修改+5个回归测试，243测试通过 | ✅ |
 | 2026-08-05 | Phase 21：运营 Agent 重设计——用户与产品的桥梁：① 数据库新建 orders + tickets 表；② 10 个运营工具（产品查询×4 search_hotels/flights/tickets/guides + 订单管理×4 get_order/list_orders/cancel_order/modify_order + 工单×2 create_ticket/check_ticket）；③ 运营工具作为平台共享能力层（MCP→Mock 降级）；④ Agent 重写：12 工具 + WON 接管 + 紧急升级 + CRM 强制写入；⑤ 新建 operations_handoff 节点（销售成交后运营自动接管）；⑥ after_sales 路由新增 won→operations_handoff→operations_sync；⑦ session_context 检测 has_active_order → intent_router 加权 operations ×1.5；⑧ State 新增 has_active_order/active_order_id/order_context 字段；⑨ MemoryManager 新增 7 个 order/ticket CRUD 方法；⑩ 新建 2 文件/重写 3 文件/修改 10 文件；⑪ 243 测试全部通过（+28 运营专项测试） | ✅ |
 | 2026-08-05 | Phase 21-续-2：LIGHT_MODEL 修复——① 销售 Agent（6 tools）和运营 Agent（12 tools）调用 qwen-turbo 时 API 返回 400 → 根因是 qwen-turbo 不支持多工具 function calling；② `get_light_llm()` 默认模型从 `qwen-turbo` 改为 `qwen-plus`（代码默认 + `.env` 显式配置）；③ `.env.example` 补全 LIGHT_MODEL/LIGHT_TEMPERATURE/LIGHT_MAX_TOKENS 文档；④ `ainvoke()` 新增详细错误日志（记录 API 响应体便于排查）；⑤ ⚠️ 需重启后端使配置生效 | ✅ |
+| 2026-08-05 | Phase 21-续-3：E2E 测试 3 项修复——① P0 西班牙语回复中文：`customer_service.py` 最终回答指令改为 7 语言感知（zh/en/es/ja/ko/hi/ar）+ 投诉关键词扩展为 7 语言；② P1 Profile 页面路由冲突：API 端点 `/profile*` → `/api/profile*`（GET/PUT/suggestions），新增 `GET /profile` 返回 HTML 页面，`profile.html` API 路径同步，`index.html` 侧边栏画像链接更新；③ P1 ROUTER_MODEL 不一致：`.env` 中 `ROUTER_MODEL` 从 `qwen-turbo` 修正为 `qwen-plus`（与 `.env.example` 对齐）；④ `services/llm.py` 新增 `reset_all_singletons()` 免重启切换 + `_build_body()` 调试日志；⑤ `api/main.py` 启动日志新增 LIGHT_MODEL 行；⑥ 5 文件修改，243 测试通过 | ✅ |
 
